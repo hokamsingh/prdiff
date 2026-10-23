@@ -161,10 +161,13 @@ Time is spent in `git` subprocesses; the Rust side is under a millisecond. Repro
 ## Status
 
 `cargo test` runs 61 tests against fixture repos built with the real `git` binary (golden JSON, CLI exit codes, a fake
-`gh`, a local `file://` release for `install.sh`, a randomized conflict check). **Not run against the real thing:** the
-GitHub integration (`--pr`, `publish`) was tested against a fake `gh` only; `action.yml`, `release.yml`, the Homebrew
-formula and the `curl | sh` path against real releases have never run, because no release exists yet. macOS is covered by
-CI, not by hand.
+`gh`, a local `file://` release for `install.sh`, a randomized conflict check). CI runs them with `fmt` and `clippy -D
+warnings` on Ubuntu and macOS (git 2.55 and 2.56 there; development used 2.43) and is green. CI already caught one real
+macOS bug (`\b` is not supported in POSIX regex, which broke `where '#123'`).
+
+**Not run against the real thing:** the GitHub integration (`--pr`, `publish`) was tested against a fake `gh` only;
+`action.yml`, `release.yml`, the Homebrew formula and the `curl | sh` path against real releases have never run,
+because no release exists yet (push a `v*` tag to create one).
 
 ## Limits
 
