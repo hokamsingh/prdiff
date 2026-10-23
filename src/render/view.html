@@ -66,6 +66,12 @@ code, .mono { font-family: var(--mono); font-size: 12.5px; }
 .badge.NEW_TO_BASE { background: var(--new-bg); color: var(--new); }
 .badge.ALREADY_ON_BASE { background: var(--shipped-bg); color: var(--shipped); }
 .badge.risk { background: var(--partial-bg); color: var(--partial); }
+.badge.MERGED, .badge.SHIPPED_P { background: var(--shipped-bg); color: var(--shipped); }
+.badge.NOT_PRESENT { background: var(--surface); color: var(--muted); border: 1px solid var(--border); font-weight: 500; }
+table.train { width: 100%; border-collapse: collapse; }
+table.train th, table.train td { padding: 6px 10px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: middle; }
+table.train th { position: sticky; top: 0; background: var(--bg); font-size: 12px; color: var(--muted); }
+table.train td.sub { max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .badge.plain { background: var(--surface); color: var(--muted); border: 1px solid var(--border); font-weight: 500; }
 .subject { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .meta { color: var(--muted); font-size: 12px; white-space: nowrap; }
@@ -131,6 +137,7 @@ table.sbs tr.fold:hover td { color: var(--text); }
   <div class="tabs" role="tablist">
     <button class="tab" role="tab" id="tab-commits" aria-selected="true">Commits</button>
     <button class="tab" role="tab" id="tab-files" aria-selected="false">Files</button>
+    <button class="tab hidden" role="tab" id="tab-train" aria-selected="false">Train</button>
   </div>
   <div class="tools">
     <input type="search" id="q" placeholder="Filter by subject, sha or path  (press /)" aria-label="Filter">
@@ -439,15 +446,34 @@ table.sbs tr.fold:hover td { color: var(--text); }
     document.getElementById('c-' + sha)?.scrollIntoView({ block: 'center' });
   }
 
+  const PRES = { MERGED: 'merged', PATCH_EQUIVALENT: 'cherry-pick', SHIPPED: 'same content', PARTIAL: 'partial', NOT_PRESENT: 'not yet' };
+  function trainEl(rows) {
+    const T = R.train;
+    const head = h('tr', {}, h('th', {}, 'Commit'), h('th', {}, 'Subject'),
+      ...T.envs.map((e) => h('th', { title: `${e.ref} @ ${short(e.sha)}` }, `${e.name} (${e.missing} missing)`)));
+    const body = rows.map((r) => h('tr', {},
+      h('td', {}, h('code', {}, r.short)), h('td', { class: 'sub', title: r.subject }, r.subject),
+      ...r.states.map((s) => h('td', {}, h('span', {
+        class: 'badge ' + (s === 'PATCH_EQUIVALENT' ? 'PATCH_EQUIVALENT' : s === 'SHIPPED' ? 'SHIPPED' : s === 'PARTIAL' ? 'PARTIAL' : s === 'MERGED' ? 'MERGED' : 'NOT_PRESENT'),
+      }, PRES[s])))));
+    return h('table', { class: 'train' }, h('thead', {}, head), h('tbody', {}, body));
+  }
+
   function render() {
-    for (const k of ['commits', 'files']) document.getElementById('tab-' + k).setAttribute('aria-selected', String(state.tab === k));
+    document.getElementById('tab-train').classList.toggle('hidden', !R.train);
+    for (const k of ['commits', 'files', 'train']) document.getElementById('tab-' + k).setAttribute('aria-selected', String(state.tab === k));
     document.getElementById('kind').classList.toggle('hidden', state.tab !== 'commits');
     document.getElementById('owner').classList.toggle('hidden', state.tab !== 'files' || !(R.owners_summary || []).length);
     const q = state.q.toLowerCase();
     const list = document.getElementById('list');
     list.replaceChildren();
     let shown = [];
-    if (state.tab === 'commits') {
+    if (state.tab === 'train' && R.train) {
+      shown = R.train.rows.filter((r) =>
+        (!state.hide || r.states.some((s) => s === 'NOT_PRESENT' || s === 'PARTIAL')) &&
+        (!q || r.subject.toLowerCase().includes(q) || r.sha.startsWith(q)));
+      if (shown.length) list.append(trainEl(shown));
+    } else if (state.tab === 'commits') {
       shown = R.commits.filter((c) =>
         (!state.classes.size || state.classes.has(c.class)) &&
         (!state.kind || c.kind === state.kind) &&
@@ -465,6 +491,7 @@ table.sbs tr.fold:hover td { color: var(--text); }
 
   document.getElementById('tab-commits').onclick = () => { state.tab = 'commits'; render(); };
   document.getElementById('tab-files').onclick = () => { state.tab = 'files'; render(); };
+  document.getElementById('tab-train').onclick = () => { state.tab = 'train'; render(); };
   document.getElementById('q').addEventListener('input', (e) => { state.q = e.target.value; render(); });
   const ownerSel = document.getElementById('owner');
   ownerSel.append(h('option', { value: '' }, 'All owners'),

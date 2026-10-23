@@ -20,3 +20,4 @@ pub mod render;
 pub mod report;
 pub mod risk;
 pub mod sides;
+pub mod train;

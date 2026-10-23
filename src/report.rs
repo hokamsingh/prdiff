@@ -229,6 +229,9 @@ pub struct Report {
     pub conflict_details: Vec<ConflictDetail>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub owners_summary: Vec<OwnerSummary>,
+    /// Where each commit stands per environment (only with `--env` / `[[environments]]`, for `view`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub train: Option<crate::train::Matrix>,
     /// Both versions of each changed file (only populated for `prdiff view`).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub file_sides: Vec<crate::sides::FileSides>,

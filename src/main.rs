@@ -6,6 +6,7 @@ use prdiff::error::{Error, bad};
 use prdiff::git::Git;
 use prdiff::patchid::Scope;
 use prdiff::render;
+use prdiff::train;
 use std::io::Read;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -130,6 +131,9 @@ enum Cmd {
         /// Open the report in the default browser.
         #[arg(long)]
         open: bool,
+        /// Environments for a Train tab, as name=ref, repeatable. Default: [[environments]] in prdiff.toml.
+        #[arg(long = "env")]
+        envs: Vec<String>,
         /// Show at most this many diff lines per file.
         #[arg(long, default_value_t = 400)]
         max_lines: usize,
@@ -139,6 +143,27 @@ enum Cmd {
         /// Most file content to embed for the side-by-side viewer, in MB.
         #[arg(long, default_value_t = 8)]
         max_embed_mb: usize,
+    },
+    /// Where does a commit stand per environment? e.g. `prdiff where abc1234 --env production=origin/production`.
+    Where {
+        /// A revision, or `#123` for the commit mentioning that PR (searched in --head).
+        rev: String,
+        #[command(flatten)]
+        c: Common,
+        /// Environment as name=ref, repeatable, furthest along first. Default: [[environments]] in prdiff.toml.
+        #[arg(long = "env")]
+        envs: Vec<String>,
+        #[arg(long, value_enum, default_value_t = Format::Text)]
+        format: Format,
+    },
+    /// Every head-only commit against every environment (the release train).
+    Matrix {
+        #[command(flatten)]
+        c: Common,
+        #[arg(long = "env")]
+        envs: Vec<String>,
+        #[arg(long, value_enum, default_value_t = Format::Text)]
+        format: Format,
     },
     /// Fail (exit 5) if a PR description lists stale commits or omits new ones.
     Check {
@@ -151,6 +176,11 @@ enum Cmd {
 }
 
 fn options(cli: &Cli, c: &Common) -> Result<(Options, Config)> {
+    options_with(cli, c, true)
+}
+
+/// `infer_base = false` for commands that compare against environments instead of one base.
+fn options_with(cli: &Cli, c: &Common, infer_base: bool) -> Result<(Options, Config)> {
     let cfg = config::load(&cli.repo, cli.config.as_deref())?;
     let git = Git::new(&cli.repo, Duration::from_secs(cli.timeout));
     let head = match c.head.clone().or_else(|| cfg.head.clone()) {
@@ -163,6 +193,7 @@ fn options(cli: &Cli, c: &Common) -> Result<(Options, Config)> {
     };
     let base = match c.base.clone().or_else(|| cfg.base.clone()) {
         Some(b) => b,
+        None if !infer_base => String::new(),
         None => {
             let b = config::infer_base(&git)?;
             eprintln!("prdiff: --base not given, using {b}");
@@ -192,6 +223,14 @@ fn options(cli: &Cli, c: &Common) -> Result<(Options, Config)> {
     o.verbose = cli.verbose;
     o.timeout = Duration::from_secs(cli.timeout);
     Ok((o, cfg))
+}
+
+/// `--env name=ref` flags win over `[[environments]]` in the config.
+fn env_list(flags: &[String], cfg: &Config) -> Result<Vec<config::EnvRef>> {
+    if flags.is_empty() {
+        return Ok(cfg.environments.clone());
+    }
+    flags.iter().map(|s| train::parse_env(s)).collect()
 }
 
 fn conflict_gate(c: &Common, conflicts: &[String]) -> Result<()> {
@@ -244,15 +283,20 @@ fn run(cli: Cli) -> Result<()> {
             max_lines,
             no_sides,
             max_embed_mb,
+            envs,
         } => {
-            let mut o = options(&cli, c)?.0;
+            let (mut o, cfg) = options(&cli, c)?;
             o.detail = Some(*max_lines);
             o.sides_budget = if *no_sides {
                 0
             } else {
                 max_embed_mb * 1024 * 1024
             };
-            let r = analyze(&o)?;
+            let mut r = analyze(&o)?;
+            let train_envs = env_list(envs, &cfg)?;
+            if !train_envs.is_empty() {
+                r.train = Some(train::matrix(&o, &train_envs)?);
+            }
             let html = render::view::render(&r);
             if out == "-" {
                 print!("{html}");
@@ -276,6 +320,34 @@ fn run(cli: Cli) -> Result<()> {
                 }
             }
             conflict_gate(c, &r.conflicts)
+        }
+        Cmd::Where {
+            rev,
+            c,
+            envs,
+            format,
+        } => {
+            let (mut o, cfg) = options_with(&cli, c, false)?;
+            let git = Git::new(&cli.repo, o.timeout);
+            let commit = train::resolve_commit(&git, rev, &o.head)?;
+            o.head = commit.clone();
+            let w = train::locate(&o, &env_list(envs, &cfg)?, &commit)?;
+            if *format == Format::Json {
+                println!("{}", serde_json::to_string_pretty(&w)?);
+            } else {
+                print!("{}", train::render_where(&w));
+            }
+            Ok(())
+        }
+        Cmd::Matrix { c, envs, format } => {
+            let (o, cfg) = options_with(&cli, c, false)?;
+            let m = train::matrix(&o, &env_list(envs, &cfg)?)?;
+            match format {
+                Format::Json => println!("{}", serde_json::to_string_pretty(&m)?),
+                Format::Markdown => print!("{}", train::render_matrix_markdown(&m)),
+                Format::Text => print!("{}", train::render_matrix(&m)),
+            }
+            Ok(())
         }
         Cmd::Check { c, body } => {
             let text = if body == "-" {
