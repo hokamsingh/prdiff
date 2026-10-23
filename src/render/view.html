@@ -72,6 +72,13 @@ table.train { width: 100%; border-collapse: collapse; }
 table.train th, table.train td { padding: 6px 10px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: middle; }
 table.train th { position: sticky; top: 0; background: var(--bg); font-size: 12px; color: var(--muted); }
 table.train td.sub { max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.badge.SAME { background: var(--surface); color: var(--muted); border: 1px solid var(--border); font-weight: 500; }
+.badge.CHANGED { background: var(--partial-bg); color: var(--partial); }
+.badge.ADDED { background: var(--add-bg); color: var(--shipped); }
+.badge.DROPPED { background: var(--del-bg); color: var(--danger); }
+.interdiff { margin: 0; font: 12px/1.45 var(--mono); overflow-x: auto; }
+.interdiff div { padding: 0 8px; white-space: pre; }
+.interdiff .a { background: var(--add-bg); } .interdiff .d { background: var(--del-bg); } .interdiff .h { color: var(--muted); }
 .badge.plain { background: var(--surface); color: var(--muted); border: 1px solid var(--border); font-weight: 500; }
 .subject { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .meta { color: var(--muted); font-size: 12px; white-space: nowrap; }
@@ -138,6 +145,7 @@ table.sbs tr.fold:hover td { color: var(--text); }
     <button class="tab" role="tab" id="tab-commits" aria-selected="true">Commits</button>
     <button class="tab" role="tab" id="tab-files" aria-selected="false">Files</button>
     <button class="tab hidden" role="tab" id="tab-train" aria-selected="false">Train</button>
+    <button class="tab hidden" role="tab" id="tab-rewritten" aria-selected="false">Rewritten</button>
   </div>
   <div class="tools">
     <input type="search" id="q" placeholder="Filter by subject, sha or path  (press /)" aria-label="Filter">
@@ -459,16 +467,44 @@ table.sbs tr.fold:hover td { color: var(--text); }
     return h('table', { class: 'train' }, h('thead', {}, head), h('tbody', {}, body));
   }
 
+  const PAIR = { SAME: 'unchanged', CHANGED: 'amended', DROPPED: 'dropped', ADDED: 'added' };
+  function rewrittenEl(pairs) {
+    return pairs.map((p) => {
+      const key = 'r-' + (p.new_sha || p.old_sha);
+      const open = state.allOpen || state.open.has(key);
+      const row = h('div', { class: 'row' + (open ? ' open' : '') });
+      const diff = (p.interdiff || []).length
+        ? h('pre', { class: 'interdiff' }, (p.interdiff || []).map((l) => {
+          const t = l.replace(/^\s*/, '')[0];
+          return h('div', { class: t === '+' ? 'a' : t === '-' ? 'd' : t === '@' ? 'h' : '' }, l || ' ');
+        }))
+        : h('div', { class: 'note' }, p.status === 'SAME' ? 'Same patch and message in both versions.'
+          : p.status === 'DROPPED' ? 'Only in the old version.' : p.status === 'ADDED' ? 'Only in the new version.' : 'Message changed.');
+      row.append(
+        h('button', { class: 'head', 'aria-expanded': String(open), onclick: () => { state.open.has(key) ? state.open.delete(key) : state.open.add(key); row.classList.toggle('open'); } },
+          h('span', { class: 'badge ' + p.status }, PAIR[p.status]),
+          h('code', {}, (p.new_sha || p.old_sha || '').slice(0, 7)),
+          h('span', { class: 'subject', title: p.subject }, p.subject),
+          h('span', { class: 'meta' }, `${p.old_index ?? '–'} → ${p.new_index ?? '–'}`)),
+        h('div', { class: 'body' }, diff));
+      return row;
+    });
+  }
+
   function render() {
+    document.getElementById('tab-rewritten').classList.toggle('hidden', !R.rewritten);
     document.getElementById('tab-train').classList.toggle('hidden', !R.train);
-    for (const k of ['commits', 'files', 'train']) document.getElementById('tab-' + k).setAttribute('aria-selected', String(state.tab === k));
+    for (const k of ['commits', 'files', 'train', 'rewritten']) document.getElementById('tab-' + k).setAttribute('aria-selected', String(state.tab === k));
     document.getElementById('kind').classList.toggle('hidden', state.tab !== 'commits');
     document.getElementById('owner').classList.toggle('hidden', state.tab !== 'files' || !(R.owners_summary || []).length);
     const q = state.q.toLowerCase();
     const list = document.getElementById('list');
     list.replaceChildren();
     let shown = [];
-    if (state.tab === 'train' && R.train) {
+    if (state.tab === 'rewritten' && R.rewritten) {
+      shown = R.rewritten.pairs.filter((p) => !q || p.subject.toLowerCase().includes(q));
+      list.append(...rewrittenEl(shown));
+    } else if (state.tab === 'train' && R.train) {
       shown = R.train.rows.filter((r) =>
         (!state.hide || r.states.some((s) => s === 'NOT_PRESENT' || s === 'PARTIAL')) &&
         (!q || r.subject.toLowerCase().includes(q) || r.sha.startsWith(q)));
@@ -492,6 +528,7 @@ table.sbs tr.fold:hover td { color: var(--text); }
   document.getElementById('tab-commits').onclick = () => { state.tab = 'commits'; render(); };
   document.getElementById('tab-files').onclick = () => { state.tab = 'files'; render(); };
   document.getElementById('tab-train').onclick = () => { state.tab = 'train'; render(); };
+  document.getElementById('tab-rewritten').onclick = () => { state.tab = 'rewritten'; render(); };
   document.getElementById('q').addEventListener('input', (e) => { state.q = e.target.value; render(); });
   const ownerSel = document.getElementById('owner');
   ownerSel.append(h('option', { value: '' }, 'All owners'),

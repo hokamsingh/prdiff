@@ -18,6 +18,7 @@ pub mod rawdiff;
 pub mod refs;
 pub mod render;
 pub mod report;
+pub mod rewrite;
 pub mod risk;
 pub mod sides;
 pub mod train;

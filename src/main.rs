@@ -6,6 +6,7 @@ use prdiff::error::{Error, bad};
 use prdiff::git::Git;
 use prdiff::patchid::Scope;
 use prdiff::render;
+use prdiff::rewrite;
 use prdiff::train;
 use std::io::Read;
 use std::path::PathBuf;
@@ -158,6 +159,9 @@ enum Cmd {
         /// Port for --serve (0 = pick a free one).
         #[arg(long, default_value_t = 8765)]
         port: u16,
+        /// Previous version of the head, for a Rewritten tab (force-pushed branches).
+        #[arg(long)]
+        old: Option<String>,
         /// Environments for a Train tab, as name=ref, repeatable. Default: [[environments]] in prdiff.toml.
         #[arg(long = "env")]
         envs: Vec<String>,
@@ -170,6 +174,16 @@ enum Cmd {
         /// Most file content to embed for the side-by-side viewer, in MB.
         #[arg(long, default_value_t = 8)]
         max_embed_mb: usize,
+    },
+    /// What changed between the old and new version of a force-pushed branch (via git range-diff).
+    Rewritten {
+        #[command(flatten)]
+        c: Common,
+        /// The previous version. Default: `<head>@{1}` (the remote-tracking ref before the last fetch).
+        #[arg(long)]
+        old: Option<String>,
+        #[arg(long, value_enum, default_value_t = Format::Text)]
+        format: Format,
     },
     /// Where does a commit stand per environment? e.g. `prdiff where abc1234 --env production=origin/production`.
     Where {
@@ -423,6 +437,7 @@ fn run(cli: Cli) -> Result<()> {
             no_sides,
             max_embed_mb,
             envs,
+            old,
             serve: serve_flag,
             port,
         } => {
@@ -438,6 +453,10 @@ fn run(cli: Cli) -> Result<()> {
                 let mut r = analyze(&o)?;
                 if !train_envs.is_empty() {
                     r.train = Some(train::matrix(&o, &train_envs)?);
+                }
+                if let Some(old) = old {
+                    let git = Git::new(&o.repo, o.timeout);
+                    r.rewritten = Some(rewrite::rewritten(&git, &o.base, Some(old), &o.head)?);
                 }
                 let html = render::view::render(&r);
                 Ok((r, html))
@@ -468,6 +487,17 @@ fn run(cli: Cli) -> Result<()> {
                 }
             }
             conflict_gate(c, &r.conflicts)
+        }
+        Cmd::Rewritten { c, old, format } => {
+            let (o, _) = options(&cli, c)?;
+            let git = Git::new(&o.repo, o.timeout);
+            let r = rewrite::rewritten(&git, &o.base, old.as_deref(), &o.head)?;
+            if *format == Format::Json {
+                println!("{}", serde_json::to_string_pretty(&r)?);
+            } else {
+                print!("{}", rewrite::render_text(&r));
+            }
+            Ok(())
         }
         Cmd::Where {
             rev,

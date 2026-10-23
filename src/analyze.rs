@@ -286,6 +286,7 @@ pub fn analyze(o: &Options) -> Result<Report> {
         owners_summary,
         file_sides,
         train: None,
+        rewritten: None,
         conflicts_best_effort: conflict_res.best_effort,
         totals,
     })
