@@ -49,8 +49,10 @@ renamed file is shown under its old name on the left; added and deleted files sh
 viewer; files over 512 KB per side, or past the report-wide `--max-embed-mb` budget (default 8), get a note with the
 `git diff` command instead. `--no-sides` leaves file contents out entirely.
 
-The left side is the target's *current* tip, so a line that differs may also come from a commit that reached the target
-after the branch was cut; the viewer says so.
+The left side is the target's *current* tip, so some differences were not made by the PR at all. The viewer uses the
+merge-base as a third copy to tell them apart: red/green = changed by this PR; **amber** = changed on the target since
+the branch was cut (not part of this PR); **amber with a red edge** = changed on both sides, which is where a manual
+merge is likely. The header counts each kind of change.
 
 ![side by side](docs/side-by-side.png)
 
@@ -94,7 +96,7 @@ Reproduce: `python3 scripts/gen_bench_repo.py /tmp/b 20000 1500 && scripts/bench
 ## Develop
 
 ```bash
-cargo test     # 24 tests: fixture repos built with the real git binary, a golden JSON, CLI exit codes, randomized conflict check
+cargo test     # 26 tests: fixture repos built with the real git binary, a golden JSON, CLI exit codes, randomized conflict check
 ```
 Golden file: `UPDATE_GOLDEN=1 cargo test --test cli golden`.
 

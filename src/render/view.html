@@ -105,6 +105,14 @@ table.sbs td { vertical-align: top; padding: 0 8px; white-space: pre-wrap; overf
 table.sbs td.ln { width: 48px; text-align: right; color: var(--muted); user-select: none; background: var(--surface); padding: 0 6px; }
 table.sbs td.code::after { content: "\200b"; }
 table.sbs td.d { background: var(--del-bg); } table.sbs td.a { background: var(--add-bg); }
+table.sbs td.t { background: var(--partial-bg); box-shadow: inset 3px 0 0 var(--partial); }
+table.sbs td.t2 { background: var(--partial-bg); box-shadow: inset 3px 0 0 var(--danger); }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-top: 4px; font-size: 12px; color: var(--muted); }
+.lg { display: inline-flex; align-items: center; gap: 6px; }
+.sw { width: 12px; height: 12px; border-radius: 3px; display: inline-block; border: 1px solid var(--border); }
+.sw.pr { background: linear-gradient(90deg, var(--del-bg) 50%, var(--add-bg) 50%); }
+.sw.tgt { background: var(--partial-bg); box-shadow: inset 3px 0 0 var(--partial); }
+.sw.both { background: linear-gradient(90deg, var(--partial-bg) 50%, var(--add-bg) 50%); box-shadow: inset 3px 0 0 var(--danger); }
 table.sbs td.empty { background: repeating-linear-gradient(135deg, transparent 0 6px, var(--surface) 6px 12px); }
 table.sbs td.code + td.ln { border-left: 1px solid var(--border); }
 table.sbs tr.fold td { background: var(--surface); color: var(--muted); text-align: center; cursor: pointer; padding: 4px; font-family: system-ui, sans-serif; }
@@ -137,7 +145,7 @@ table.sbs tr.fold:hover td { color: var(--text); }
 <div id="modal" class="hidden" role="dialog" aria-modal="true" aria-labelledby="m-title">
   <div class="panel">
     <div class="mh">
-      <div class="title"><b id="m-title" class="mono"></b><div class="note" id="m-sub"></div></div>
+      <div class="title"><b id="m-title" class="mono"></b><div class="note" id="m-sub"></div><div class="legend" id="m-legend"></div></div>
       <label><input type="checkbox" id="m-collapse" checked> Collapse unchanged</label>
       <button class="sbs-btn" id="m-prev" title="Previous change">↑ Prev</button>
       <button class="sbs-btn" id="m-next" title="Next change">↓ Next</button>
@@ -229,16 +237,24 @@ table.sbs tr.fold:hover td { color: var(--text); }
   const mBody = document.getElementById('m-body');
   let opener = null, current = null;
 
-  function row(cls, l, r) {
-    const cell = (v, ln, side) => [
+  // kind: eq | pr (changed by this PR) | tgt (changed on the target since the branch point) | both
+  function row(kind, l, r) {
+    const lcls = { pr: 'd', tgt: 't', both: 't2' }[kind] || '';
+    const rcls = kind === 'pr' || kind === 'both' ? 'a' : '';
+    const cell = (v, ln, cls) => [
       h('td', { class: 'ln' }, v == null ? '' : String(ln)),
-      h('td', { class: 'code ' + (v == null ? 'empty' : cls === 'diff' ? (side === 'l' ? 'd' : 'a') : '') }, v == null ? '' : v)];
-    return h('tr', { class: cls }, cell(l && l[0], l && l[1], 'l'), cell(r && r[0], r && r[1], 'r'));
+      h('td', { class: 'code ' + (v == null ? 'empty' : cls) }, v == null ? '' : v)];
+    const tip = { tgt: `Changed on ${R.base.name} after this branch was cut — not part of this PR`,
+      both: 'Changed on both sides — likely to need a manual merge' }[kind];
+    return h('tr', { class: kind === 'eq' ? 'eq' : 'diff ' + kind, title: tip }, cell(l && l[0], l && l[1], lcls), cell(r && r[0], r && r[1], rcls));
   }
   function buildTable(s, collapse) {
     const A = splitLines(s.base_text), B = splitLines(s.head_text);
     const CTX = 3;
     const tb = h('tbody');
+    const flags = (n, ranges) => { const f = new Uint8Array(n); for (const [st, len] of ranges || []) f.fill(1, st, st + len); return f; };
+    const tgtFlag = flags(A.length, s.target_changed), prFlag = flags(B.length, s.pr_changed);
+    const counts = { pr: 0, tgt: 0, both: 0 };
     const eq = (oi, ni, from, to) => {
       const out = [];
       for (let k = from; k < to; k++) out.push(row('eq', [A[oi + k], oi + k + 1], [B[ni + k], ni + k + 1]));
@@ -256,15 +272,24 @@ table.sbs tr.fold:hover td { color: var(--text); }
         } else tb.append(...eq(oi, ni, 0, ol));
       } else {
         const n = Math.max(ol, nl);
+        const rows = [];
         for (let k = 0; k < n; k++) {
-          const tr = row('diff', k < ol ? [A[oi + k], oi + k + 1] : null, k < nl ? [B[ni + k], ni + k + 1] : null);
-          if (k === 0) tr.dataset.block = '1';
-          tb.append(tr);
+          const l = k < ol ? oi + k : null, r = k < nl ? ni + k : null;
+          const tgt = l != null && tgtFlag[l] === 1, pr = r != null && prFlag[r] === 1;
+          let kind = 'pr';
+          if (s.three_way) kind = tgt && pr ? 'both' : tgt || (l == null && !pr) ? 'tgt' : 'pr';
+          rows.push([kind, row(kind, l != null ? [A[l], l + 1] : null, r != null ? [B[r], r + 1] : null)]);
         }
+        const kinds = new Set(rows.map((x) => x[0]));
+        const opKind = kinds.has('both') ? 'both' : kinds.has('pr') ? 'pr' : 'tgt';
+        counts[opKind]++;
+        rows[0][1].dataset.block = opKind;
+        tb.append(...rows.map((x) => x[1]));
       }
     });
     const label = (name, role, sha, exists) => h('th', { colspan: 2 },
       `${name} `, h('span', { class: 'note' }, `(${role}${exists ? '' : ', file does not exist here'})`));
+    buildTable.counts = counts;
     return h('table', { class: 'sbs' },
       h('colgroup', {}, h('col', { style: 'width:48px' }), h('col'), h('col', { style: 'width:48px' }), h('col')),
       h('thead', {}, h('tr', {}, label(R.base.name, 'target, now', R.base.sha, s.base_text != null),
@@ -275,9 +300,10 @@ table.sbs tr.fold:hover td { color: var(--text); }
     const s = current;
     document.getElementById('m-title').textContent = s.old_path ? `${s.old_path} → ${s.path}` : s.path;
     document.getElementById('m-sub').textContent =
-      `${R.base.name} @ ${short(R.base.sha)} (target, as it is now)  ⟷  ${R.head.name} @ ${short(R.head.sha)} (merging). ` +
-      `Lines that differ can also come from commits that reached ${R.base.name} after this branch was cut.`;
+      `${R.base.name} @ ${short(R.base.sha)} (target, as it is now)  ⟷  ${R.head.name} @ ${short(R.head.sha)} (merging)`;
     mBody.replaceChildren();
+    const legend = document.getElementById('m-legend');
+    legend.replaceChildren();
     const nav = !s.note && s.ops.some((o) => o[0] !== 0);
     document.getElementById('m-prev').disabled = document.getElementById('m-next').disabled = !nav;
     if (s.note) {
@@ -285,6 +311,16 @@ table.sbs tr.fold:hover td { color: var(--text); }
         h('code', {}, `git diff ${R.base.name}...${R.head.name} -- ${s.path}`)));
     } else {
       mBody.append(buildTable(s, document.getElementById('m-collapse').checked));
+      const c = buildTable.counts;
+      const item = (cls, text) => h('span', { class: 'lg' }, h('i', { class: 'sw ' + cls }), text);
+      if (s.three_way) {
+        legend.append(
+          item('pr', `${c.pr} change${c.pr === 1 ? '' : 's'} by this PR`),
+          item('tgt', `${c.tgt} changed on ${R.base.name} since the branch was cut (not in this PR)`),
+          item('both', `${c.both} changed on both sides`));
+      } else {
+        legend.append(h('span', { class: 'lg' }, `Differences may include commits that reached ${R.base.name} after this branch was cut.`));
+      }
       if (!nav) mBody.prepend(h('div', { class: 'note', style: 'padding:8px 12px' }, 'No line differences (mode change only).'));
     }
     mBody.scrollTop = 0;

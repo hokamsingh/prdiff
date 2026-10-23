@@ -380,3 +380,59 @@ fn oversized_files_get_a_note_instead_of_a_viewer() {
     assert!(s["note"].as_str().unwrap().contains("too large"));
     assert!(s["head_text"].is_null());
 }
+
+fn covers(ranges: &serde_json::Value, line: u64) -> bool {
+    ranges.as_array().unwrap().iter().any(|r| {
+        let (s, n) = (r[0].as_u64().unwrap(), r[1].as_u64().unwrap());
+        (s..s + n).contains(&line)
+    })
+}
+
+#[test]
+fn side_by_side_markers_tell_target_only_changes_from_the_prs_own() {
+    let body: String = (1..=20).map(|i| format!("line {i}\n")).collect();
+    let r = Repo::with_branches(&[("index.js", &body), ("also.js", &body)]);
+    r.checkout("develop");
+    r.write("index.js", &body.replace("line 5\n", "line five\n"));
+    r.write("also.js", &body.replace("line 8\n", "line PR\n"));
+    r.git(&["add", "-A"]);
+    r.git(&["commit", "-q", "-m", "fix: pr work"]);
+    r.checkout("staging");
+    r.write("index.js", &body.replace("line 15\n", "line fifteen\n"));
+    r.write("also.js", &body.replace("line 8\n", "line TARGET\n"));
+    r.git(&["add", "-A"]);
+    r.git(&["commit", "-q", "-m", "chore: target moves"]);
+
+    let v = view_json(&r, &[]);
+    let sides = v["file_sides"].as_array().unwrap();
+    let by = |p: &str| sides.iter().find(|s| s["path"] == p).unwrap();
+
+    let idx = by("index.js");
+    assert_eq!(idx["three_way"], true);
+    assert!(
+        covers(&idx["target_changed"], 14),
+        "target edited line 15 (index 14)"
+    );
+    assert!(!covers(&idx["target_changed"], 4));
+    assert!(
+        covers(&idx["pr_changed"], 4),
+        "the PR edited line 5 (index 4)"
+    );
+    assert!(!covers(&idx["pr_changed"], 14));
+
+    // both edited line 8: it is flagged on both sides
+    let also = by("also.js");
+    assert!(covers(&also["target_changed"], 7) && covers(&also["pr_changed"], 7));
+}
+
+#[test]
+fn a_file_added_by_the_pr_is_all_pr_change() {
+    let r = Repo::with_branches(&[("a.txt", "a\n")]);
+    r.checkout("develop");
+    r.commit("feat: add", &[("new.js", "one\ntwo\n")]);
+    let v = view_json(&r, &[]);
+    let s = &v["file_sides"][0];
+    assert_eq!(s["three_way"], true);
+    assert!(covers(&s["pr_changed"], 0) && covers(&s["pr_changed"], 1));
+    assert!(s["target_changed"].as_array().unwrap().is_empty());
+}

@@ -5,7 +5,7 @@
 
 use crate::classify::Blobs;
 use crate::git::Git;
-use crate::rawdiff::Entry;
+use crate::rawdiff::{Entry, is_zero};
 use crate::report::{NetFile, NetState};
 use anyhow::Result;
 use serde::Serialize;
@@ -25,6 +25,12 @@ pub struct FileSides {
     pub head_text: Option<String>,
     /// `[tag, old_index, old_len, new_index, new_len]`; tag 0 equal, 1 delete, 2 insert, 3 replace.
     pub ops: Vec<[u32; 5]>,
+    /// Line ranges `[start, len)` (0-based) of `base_text` that changed on the target since the branch point.
+    pub target_changed: Vec<[u32; 2]>,
+    /// Line ranges of `head_text` that this PR changed relative to the branch point.
+    pub pr_changed: Vec<[u32; 2]>,
+    /// False when the merge-base copy was unavailable, so there are no target-only/PR markers.
+    pub three_way: bool,
     /// Why there is no viewer ("binary file", "too large", ...).
     pub note: Option<String>,
 }
@@ -82,6 +88,23 @@ fn ops(old: &str, new: &str) -> Vec<[u32; 5]> {
         .collect()
 }
 
+/// Ranges of `new` that are not shared with `old` (inserted or replaced lines).
+fn changed_ranges(old: &str, new: &str) -> Vec<[u32; 2]> {
+    let (a, b) = (lines(old), lines(new));
+    capture_diff_slices(Algorithm::Patience, &a, &b)
+        .into_iter()
+        .filter_map(|op| match op {
+            DiffOp::Insert {
+                new_index, new_len, ..
+            }
+            | DiffOp::Replace {
+                new_index, new_len, ..
+            } => Some([new_index as u32, new_len as u32]),
+            _ => None,
+        })
+        .collect()
+}
+
 fn is_binary(data: &[u8]) -> bool {
     data[..data.len().min(8000)].contains(&0)
 }
@@ -124,6 +147,8 @@ pub fn collect(
         entry: &'a Entry,
         base_sha: Option<String>,
         head_sha: Option<String>,
+        /// The file at the merge-base, to tell target-only changes from this PR's.
+        mb_sha: Option<String>,
     }
     let mut jobs: Vec<Job> = Vec::new();
     for e in entries {
@@ -140,10 +165,12 @@ pub fn collect(
             _ => None,
         };
         let head_sha = (!e.is_delete()).then(|| e.new_sha.clone());
+        let mb_sha = (!is_zero(&e.old_sha)).then(|| e.old_sha.clone());
         jobs.push(Job {
             entry: e,
             base_sha,
             head_sha,
+            mb_sha,
         });
     }
 
@@ -151,6 +178,7 @@ pub fn collect(
     for j in &jobs {
         all.extend(j.base_sha.iter().cloned());
         all.extend(j.head_sha.iter().cloned());
+        all.extend(j.mb_sha.iter().cloned());
     }
     if all.is_empty() {
         return Ok(Vec::new());
@@ -172,6 +200,9 @@ pub fn collect(
             base_text: None,
             head_text: None,
             ops: Vec::new(),
+            target_changed: Vec::new(),
+            pr_changed: Vec::new(),
+            three_way: false,
             note: None,
         };
         let get = |sha: &Option<String>| -> Result<Option<Vec<u8>>, &'static str> {
@@ -197,6 +228,19 @@ pub fn collect(
                 } else {
                     budget -= cost;
                     fs.ops = ops(b.as_deref().unwrap_or(""), h.as_deref().unwrap_or(""));
+                    // Third copy: the branch point, only used to classify differences.
+                    let mb = match &j.mb_sha {
+                        None => Some(String::new()), // added by the PR: nothing at the branch point
+                        Some(sha) => contents
+                            .get(sha)
+                            .filter(|d| !is_binary(d))
+                            .map(|d| String::from_utf8_lossy(d).into_owned()),
+                    };
+                    if let Some(mb) = mb {
+                        fs.target_changed = changed_ranges(&mb, b.as_deref().unwrap_or(""));
+                        fs.pr_changed = changed_ranges(&mb, h.as_deref().unwrap_or(""));
+                        fs.three_way = true;
+                    }
                     fs.base_text = b;
                     fs.head_text = h;
                 }
