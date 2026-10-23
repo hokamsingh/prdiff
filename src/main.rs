@@ -1,7 +1,9 @@
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use prdiff::analyze::{Options, analyze, conflicts_only};
+use prdiff::config::{self, Config};
 use prdiff::error::{Error, bad};
+use prdiff::git::Git;
 use prdiff::patchid::Scope;
 use prdiff::render;
 use std::io::Read;
@@ -19,6 +21,9 @@ struct Cli {
     /// Repository directory.
     #[arg(short = 'C', long, global = true, default_value = ".")]
     repo: PathBuf,
+    /// Config file (default: prdiff.toml at the repository root, if present).
+    #[arg(long, global = true)]
+    config: Option<PathBuf>,
     /// Print per-stage timings to stderr.
     #[arg(short, long, global = true)]
     verbose: bool,
@@ -31,15 +36,23 @@ struct Cli {
 
 #[derive(Args, Clone)]
 struct Common {
-    /// Branch or ref the change would land on, e.g. origin/staging.
+    /// Branch or ref the change would land on, e.g. origin/staging. Default: `base` in prdiff.toml, else
+    /// the remote's default branch.
     #[arg(long)]
-    base: String,
-    /// Branch or ref carrying the change, e.g. origin/develop.
+    base: Option<String>,
+    /// Branch or ref carrying the change, e.g. origin/develop. Default: `head` in prdiff.toml, else the
+    /// current branch.
     #[arg(long)]
-    head: String,
+    head: Option<String>,
     /// Only consider files matching this glob (repeatable). `**` crosses directories.
     #[arg(long = "path")]
     paths: Vec<String>,
+    /// Leave files matching this glob out of file lists and stats (repeatable), e.g. lockfiles.
+    #[arg(long = "exclude")]
+    excludes: Vec<String>,
+    /// Treat whitespace-only differences as no difference.
+    #[arg(short = 'w', long)]
+    ignore_whitespace: bool,
     /// Treat every PARTIAL commit as NEW.
     #[arg(long)]
     strict: bool,
@@ -134,9 +147,33 @@ enum Cmd {
     },
 }
 
-fn options(cli: &Cli, c: &Common) -> Options {
-    let mut o = Options::new(&cli.repo, &c.base, &c.head);
-    o.paths = c.paths.clone();
+fn options(cli: &Cli, c: &Common) -> Result<(Options, Config)> {
+    let cfg = config::load(&cli.repo, cli.config.as_deref())?;
+    let git = Git::new(&cli.repo, Duration::from_secs(cli.timeout));
+    let head = match c.head.clone().or_else(|| cfg.head.clone()) {
+        Some(h) => h,
+        None => {
+            let h = config::infer_head(&git)?;
+            eprintln!("prdiff: --head not given, using {h}");
+            h
+        }
+    };
+    let base = match c.base.clone().or_else(|| cfg.base.clone()) {
+        Some(b) => b,
+        None => {
+            let b = config::infer_base(&git)?;
+            eprintln!("prdiff: --base not given, using {b}");
+            b
+        }
+    };
+    let mut o = Options::new(&cli.repo, &base, &head);
+    o.paths = if c.paths.is_empty() {
+        cfg.paths.clone()
+    } else {
+        c.paths.clone()
+    };
+    o.exclude = cfg.exclude.iter().chain(&c.excludes).cloned().collect();
+    o.ignore_whitespace = c.ignore_whitespace || cfg.ignore_whitespace;
     o.strict = c.strict;
     o.deep = !c.shallow;
     o.include_empty = c.include_empty;
@@ -149,7 +186,7 @@ fn options(cli: &Cli, c: &Common) -> Options {
     o.exact_conflicts = c.exact_conflicts;
     o.verbose = cli.verbose;
     o.timeout = Duration::from_secs(cli.timeout);
-    o
+    Ok((o, cfg))
 }
 
 fn conflict_gate(c: &Common, conflicts: &[String]) -> Result<()> {
@@ -162,7 +199,7 @@ fn conflict_gate(c: &Common, conflicts: &[String]) -> Result<()> {
 fn run(cli: Cli) -> Result<()> {
     match &cli.cmd {
         Cmd::Compare { c, format } => {
-            let r = analyze(&options(&cli, c))?;
+            let r = analyze(&options(&cli, c)?.0)?;
             print!(
                 "{}",
                 match format {
@@ -174,12 +211,12 @@ fn run(cli: Cli) -> Result<()> {
             conflict_gate(c, &r.conflicts)
         }
         Cmd::Describe { c, title } => {
-            let r = analyze(&options(&cli, c))?;
+            let r = analyze(&options(&cli, c)?.0)?;
             print!("{}", render::markdown::render(&r, title.as_deref()));
             conflict_gate(c, &r.conflicts)
         }
         Cmd::Conflicts { c, format } => {
-            let (base, head, paths, best_effort) = conflicts_only(&options(&cli, c))?;
+            let (base, head, paths, best_effort) = conflicts_only(&options(&cli, c)?.0)?;
             if *format == Format::Json {
                 let v = serde_json::json!({
                     "schema_version": prdiff::report::SCHEMA_VERSION,
@@ -203,7 +240,7 @@ fn run(cli: Cli) -> Result<()> {
             no_sides,
             max_embed_mb,
         } => {
-            let mut o = options(&cli, c);
+            let mut o = options(&cli, c)?.0;
             o.detail = Some(*max_lines);
             o.sides_budget = if *no_sides {
                 0
@@ -244,7 +281,7 @@ fn run(cli: Cli) -> Result<()> {
                 std::fs::read_to_string(body)
                     .map_err(|e| bad(format!("cannot read {body}: {e}")))?
             };
-            let r = analyze(&options(&cli, c))?;
+            let r = analyze(&options(&cli, c)?.0)?;
             let m = prdiff::check::check(&r, &text);
             if m.is_empty() {
                 println!(

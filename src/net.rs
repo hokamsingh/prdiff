@@ -13,17 +13,13 @@ pub struct NetRaw {
     pub stats: Stats,
 }
 
-pub fn diff_raw(git: &Git, merge_base: &str, head: &str) -> Result<NetRaw> {
-    let out = git.run(&[
-        "diff-tree",
-        "-r",
-        "-M",
-        "--raw",
-        "--numstat",
-        "-z",
-        merge_base,
-        head,
-    ])?;
+pub fn diff_raw(git: &Git, merge_base: &str, head: &str, ignore_ws: bool) -> Result<NetRaw> {
+    let mut args = vec!["diff-tree", "-r", "-M", "--raw", "--numstat", "-z"];
+    if ignore_ws {
+        args.push("-w");
+    }
+    args.extend([merge_base, head]);
+    let out = git.run(&args)?;
     let (entries, stats) = rawdiff::parse_raw_numstat(&out);
     Ok(NetRaw { entries, stats })
 }
@@ -35,6 +31,7 @@ pub fn build(
     blobs: &Blobs,
     filter: &PathFilter,
     commits: &[CommitReport],
+    ignore_ws: bool,
 ) -> Vec<NetFile> {
     // path -> true while every commit touching it is already on base
     let mut explained: HashMap<&str, bool> = HashMap::new();
@@ -53,7 +50,8 @@ pub fn build(
     raw.entries
         .iter()
         .filter(|e| {
-            filter.matches(&e.path) || e.old_path.as_deref().is_some_and(|o| filter.matches(o))
+            filter.matches_net(&e.path)
+                || e.old_path.as_deref().is_some_and(|o| filter.matches_net(o))
         })
         .map(|e| {
             let same_blob = match blobs.get(&e.path) {
@@ -66,11 +64,13 @@ pub fn build(
                     .as_deref()
                     .is_none_or(|o| explained.get(o).copied().unwrap_or(false));
             let (ins, del) = raw.stats.get(&e.path).copied().unwrap_or((None, None));
+            // with --ignore-whitespace a file whose PR changes are whitespace only has nothing left to ship
+            let ws_only = ignore_ws && e.status == b'M' && ins == Some(0) && del == Some(0);
             NetFile {
                 path: e.path.clone(),
                 old_path: e.old_path.clone(),
                 change: (e.status as char).to_string(),
-                state: if same_blob || all_explained {
+                state: if same_blob || all_explained || ws_only {
                     NetState::AlreadyOnBase
                 } else {
                     NetState::NewToBase

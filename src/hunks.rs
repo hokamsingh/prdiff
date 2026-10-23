@@ -10,7 +10,24 @@ use crate::git::Git;
 use crate::report::{Classification, CommitReport, FileStatus, HunkDetail};
 use anyhow::Result;
 use rayon::prelude::*;
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
+
+/// A line as compared: verbatim, or with all ASCII whitespace removed under `--ignore-whitespace`.
+type Line<'a> = Cow<'a, [u8]>;
+
+fn line(l: &[u8], ignore_ws: bool) -> Line<'_> {
+    if ignore_ws {
+        Cow::Owned(
+            l.iter()
+                .copied()
+                .filter(|b| !b.is_ascii_whitespace())
+                .collect(),
+        )
+    } else {
+        Cow::Borrowed(l)
+    }
+}
 
 struct Hunk<'a> {
     /// The `@@ -a,b +c,d @@ ...` line.
@@ -18,11 +35,11 @@ struct Hunk<'a> {
     /// Every line of the hunk with its ` `/`+`/`-` prefix, for display.
     raw: Vec<&'a [u8]>,
     /// Context + removed lines.
-    before: Vec<&'a [u8]>,
+    before: Vec<Line<'a>>,
     /// Context + added lines.
-    after: Vec<&'a [u8]>,
-    removed: Vec<&'a [u8]>,
-    added: Vec<&'a [u8]>,
+    after: Vec<Line<'a>>,
+    removed: Vec<Line<'a>>,
+    added: Vec<Line<'a>>,
 }
 
 struct FileDiff<'a> {
@@ -31,7 +48,7 @@ struct FileDiff<'a> {
 }
 
 /// Split `git diff-tree -p` output into per-file blocks, in the same order as the raw listing.
-fn parse_diff(diff: &[u8]) -> Vec<FileDiff<'_>> {
+fn parse_diff(diff: &[u8], ws: bool) -> Vec<FileDiff<'_>> {
     let mut files: Vec<FileDiff> = Vec::new();
     for line in diff.split(|b| *b == b'\n') {
         if line.starts_with(b"diff --git ") {
@@ -61,16 +78,16 @@ fn parse_diff(diff: &[u8]) -> Vec<FileDiff<'_>> {
             }
             match line.first() {
                 Some(b' ') => {
-                    h.before.push(&line[1..]);
-                    h.after.push(&line[1..]);
+                    h.before.push(self::line(&line[1..], ws));
+                    h.after.push(self::line(&line[1..], ws));
                 }
                 Some(b'-') => {
-                    h.before.push(&line[1..]);
-                    h.removed.push(&line[1..]);
+                    h.before.push(self::line(&line[1..], ws));
+                    h.removed.push(self::line(&line[1..], ws));
                 }
                 Some(b'+') => {
-                    h.after.push(&line[1..]);
-                    h.added.push(&line[1..]);
+                    h.after.push(self::line(&line[1..], ws));
+                    h.added.push(self::line(&line[1..], ws));
                 }
                 _ => {}
             }
@@ -79,19 +96,23 @@ fn parse_diff(diff: &[u8]) -> Vec<FileDiff<'_>> {
     files
 }
 
-fn contains(haystack: &[&[u8]], needle: &[&[u8]]) -> bool {
+fn contains(haystack: &[Line], needle: &[Line]) -> bool {
     if needle.is_empty() {
         return true;
     }
     if needle.len() > haystack.len() {
         return false;
     }
-    let first = needle[0];
+    let first = &needle[0];
     (0..=haystack.len() - needle.len())
-        .any(|i| haystack[i] == first && haystack[i..i + needle.len()] == *needle)
+        .any(|i| haystack[i] == *first && haystack[i..i + needle.len()] == *needle)
 }
 
-fn hunk_on_base(h: &Hunk, base: &[&[u8]]) -> bool {
+fn hunk_on_base(h: &Hunk, base: &[Line], ignore_ws: bool) -> bool {
+    // A hunk that only changes whitespace is no change at all when whitespace is ignored.
+    if ignore_ws && h.before == h.after {
+        return true;
+    }
     let applied = contains(base, &h.after);
     let reverted = h.removed.is_empty() || !contains(base, &h.before);
     if applied && reverted {
@@ -103,7 +124,7 @@ fn hunk_on_base(h: &Hunk, base: &[&[u8]]) -> bool {
     !h.removed.is_empty()
         && h.added
             .iter()
-            .any(|l| !l.iter().all(u8::is_ascii_whitespace))
+            .any(|l| !l.is_empty() && !l.iter().all(u8::is_ascii_whitespace))
         && contains(base, &h.added)
         && !contains(base, &h.removed)
 }
@@ -206,6 +227,15 @@ fn hunk_details(hunks: &[Hunk], on_base: &[bool], max_lines: usize) -> Vec<HunkD
         .collect()
 }
 
+#[derive(Clone, Copy)]
+pub struct HunkSettings {
+    /// A NEW commit with some hunks on base becomes PARTIAL.
+    pub promote_partial: bool,
+    /// Keep displayable hunks (at most this many lines per file).
+    pub detail: Option<usize>,
+    pub ignore_ws: bool,
+}
+
 /// Fill in hunk counts for `targets` (indexes into `commits`/`reports`) and promote a commit to SHIPPED
 /// when every hunk of every non-identical file is already on base.
 pub fn analyze(
@@ -214,9 +244,13 @@ pub fn analyze(
     reports: &mut [CommitReport],
     targets: &[usize],
     blobs: &Blobs,
-    promote_partial: bool,
-    detail: Option<usize>,
+    settings: &HunkSettings,
 ) -> Result<()> {
+    let HunkSettings {
+        promote_partial,
+        detail,
+        ignore_ws,
+    } = *settings;
     if targets.is_empty() {
         return Ok(());
     }
@@ -265,13 +299,20 @@ pub fn analyze(
         }
     }
     let contents = read_blobs(git, &needed)?;
-    let lines: HashMap<&str, Vec<&[u8]>> = contents
+    let lines: HashMap<&str, Vec<Line>> = contents
         .iter()
-        .map(|(sha, data)| (sha.as_str(), data.split(|b| *b == b'\n').collect()))
+        .map(|(sha, data)| {
+            (
+                sha.as_str(),
+                data.split(|b| *b == b'\n')
+                    .map(|l| line(l, ignore_ws))
+                    .collect(),
+            )
+        })
         .collect();
 
     for (t, &i) in targets.iter().enumerate() {
-        let parsed = parse_diff(diffs[t]);
+        let parsed = parse_diff(diffs[t], ignore_ws);
         let mut explained = true;
         let mut any_hunk_file = false;
         for (k, (e, f)) in commits[i]
@@ -298,7 +339,10 @@ pub fn analyze(
                 // The whole file matches base, so every hunk is on base.
                 vec![true; fd.hunks.len()]
             } else if let Some(base) = base_lines {
-                fd.hunks.iter().map(|h| hunk_on_base(h, base)).collect()
+                fd.hunks
+                    .iter()
+                    .map(|h| hunk_on_base(h, base, ignore_ws))
+                    .collect()
             } else {
                 vec![false; fd.hunks.len()]
             };

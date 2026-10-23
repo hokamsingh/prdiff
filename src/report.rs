@@ -75,6 +75,14 @@ pub struct CommitReport {
     /// For PATCH_EQUIVALENT: the base commit carrying the same patch.
     pub matched_base_commit: Option<String>,
     pub reverts: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub breaking: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pr: Option<u32>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub tickets: Vec<String>,
     pub files: Vec<FileChange>,
     pub hunks_total: u32,
     pub hunks_already_on_base: u32,

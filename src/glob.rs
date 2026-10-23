@@ -5,18 +5,32 @@ use regex::Regex;
 
 pub struct PathFilter {
     res: Vec<Regex>,
+    excludes: Vec<Regex>,
 }
 
 impl PathFilter {
     pub fn new(globs: &[String]) -> Result<Self> {
-        let res = globs
-            .iter()
-            .map(|g| {
-                Regex::new(&to_regex(g))
-                    .map_err(|e| crate::error::bad(format!("bad --path glob {g:?}: {e}")))
-            })
-            .collect::<Result<Vec<_>>>()?;
-        Ok(PathFilter { res })
+        Self::with_excludes(globs, &[])
+    }
+
+    pub fn with_excludes(globs: &[String], excludes: &[String]) -> Result<Self> {
+        let compile = |gs: &[String], what: &str| {
+            gs.iter()
+                .map(|g| {
+                    Regex::new(&to_regex(g))
+                        .map_err(|e| crate::error::bad(format!("bad {what} glob {g:?}: {e}")))
+                })
+                .collect::<Result<Vec<_>>>()
+        };
+        Ok(PathFilter {
+            res: compile(globs, "--path")?,
+            excludes: compile(excludes, "--exclude")?,
+        })
+    }
+
+    /// For file lists and stats: inside `--path` and not excluded.
+    pub fn matches_net(&self, path: &str) -> bool {
+        self.matches(path) && !self.excludes.iter().any(|r| r.is_match(path))
     }
 
     pub fn is_active(&self) -> bool {

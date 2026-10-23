@@ -5,6 +5,7 @@ pub mod cache;
 pub mod check;
 pub mod classify;
 pub mod commits;
+pub mod config;
 pub mod conflicts;
 pub mod error;
 pub mod git;

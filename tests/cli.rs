@@ -70,7 +70,9 @@ fn exit_codes() {
         Some(2)
     );
     assert_eq!(
-        bin(&r, &["compare", "--base", "staging"]).status.code(),
+        bin(&r, &["compare", "--base", "staging", "--bogus"])
+            .status
+            .code(),
         Some(2),
         "clap usage error"
     );

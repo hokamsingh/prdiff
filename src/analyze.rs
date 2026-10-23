@@ -23,6 +23,10 @@ pub struct Options {
     pub base: String,
     pub head: String,
     pub paths: Vec<String>,
+    /// Left out of file lists and stats (not of commit classification).
+    pub exclude: Vec<String>,
+    /// Treat whitespace-only differences as no difference.
+    pub ignore_whitespace: bool,
     pub strict: bool,
     /// Hunk analysis for NEW commits too (default). Off = only PARTIAL commits, as in the LLD.
     pub deep: bool,
@@ -46,6 +50,8 @@ impl Options {
             base: base.into(),
             head: head.into(),
             paths: vec![],
+            exclude: vec![],
+            ignore_whitespace: false,
             strict: false,
             deep: true,
             include_empty: false,
@@ -95,7 +101,7 @@ pub fn analyze(o: &Options) -> Result<Report> {
         rows: Mutex::new(vec![]),
     };
     let git = Git::new(&o.repo, o.timeout);
-    let filter = PathFilter::new(&o.paths)?;
+    let filter = PathFilter::with_excludes(&o.paths, &o.exclude)?;
 
     let (base, head, merge_base) = t.stage("refs", || -> Result<_> {
         refs::ensure_not_shallow(&git)?;
@@ -140,7 +146,7 @@ pub fn analyze(o: &Options) -> Result<Report> {
         || t.stage("patch-id", || patchid::equivalents(&git, &patch_input, &base.sha, &head.sha, o.scope, &mut cache)),
         || -> (Result<net::NetRaw>, Result<conflicts::Conflicts>, Result<Blobs>) {
             let (net_raw, conflict_res) = rayon::join(
-                || t.stage("net-diff", || net::diff_raw(&git, &merge_base, &head.sha)),
+                || t.stage("net-diff", || net::diff_raw(&git, &merge_base, &head.sha, o.ignore_whitespace)),
                 || t.stage("conflicts", || conflicts::detect(&git, &base.sha, &head.sha, (!o.exact_conflicts).then_some(merge_base.as_str()))),
             );
             let blobs = match &net_raw {
@@ -179,8 +185,11 @@ pub fn analyze(o: &Options) -> Result<Report> {
             &mut reports,
             &targets,
             &blobs,
-            !o.strict,
-            o.detail,
+            &hunks::HunkSettings {
+                promote_partial: !o.strict,
+                detail: o.detail,
+                ignore_ws: o.ignore_whitespace,
+            },
         )
     })?;
     if o.detail.is_some() {
@@ -199,7 +208,9 @@ pub fn analyze(o: &Options) -> Result<Report> {
         }
     }
 
-    let net_files = t.stage("net", || net::build(&net_raw, &blobs, &filter, &reports));
+    let net_files = t.stage("net", || {
+        net::build(&net_raw, &blobs, &filter, &reports, o.ignore_whitespace)
+    });
 
     let file_sides = if o.detail.is_some() && o.sides_budget > 0 {
         t.stage("sides", || {
@@ -247,7 +258,7 @@ pub fn analyze(o: &Options) -> Result<Report> {
 /// Just Stage F, for `prdiff conflicts`.
 pub fn conflicts_only(o: &Options) -> Result<(refs::RefInfo, refs::RefInfo, Vec<String>, bool)> {
     let git = Git::new(&o.repo, o.timeout);
-    let filter = PathFilter::new(&o.paths)?;
+    let filter = PathFilter::with_excludes(&o.paths, &o.exclude)?;
     refs::ensure_not_shallow(&git)?;
     let base = refs::resolve(&git, &o.base)?;
     let head = refs::resolve(&git, &o.head)?;
