@@ -139,6 +139,7 @@
     "files_already_on_base": 2,
     "insertions": 1,
     "deletions": 0,
-    "conflicted_files": 0
+    "conflicted_files": 0,
+    "risky_files": 0
   }
 }

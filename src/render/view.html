@@ -65,6 +65,7 @@ code, .mono { font-family: var(--mono); font-size: 12.5px; }
 .badge.PATCH_EQUIVALENT { background: var(--pe-bg); color: var(--pe); }
 .badge.NEW_TO_BASE { background: var(--new-bg); color: var(--new); }
 .badge.ALREADY_ON_BASE { background: var(--shipped-bg); color: var(--shipped); }
+.badge.risk { background: var(--partial-bg); color: var(--partial); }
 .badge.plain { background: var(--surface); color: var(--muted); border: 1px solid var(--border); font-weight: 500; }
 .subject { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .meta { color: var(--muted); font-size: 12px; white-space: nowrap; }
@@ -137,6 +138,7 @@ table.sbs tr.fold:hover td { color: var(--text); }
       <option value="">All kinds</option><option>FEAT</option><option>FIX</option>
       <option>REFACTOR</option><option>CHORE</option><option>OTHER</option>
     </select>
+    <select id="owner" aria-label="Owner" class="hidden"></select>
     <label><input type="checkbox" id="hide"> Hide already on base</label>
     <button class="tab" id="expand" style="padding:6px 10px;border:1px solid var(--border);border-radius:6px">Expand all</button>
   </div>
@@ -163,7 +165,7 @@ table.sbs tr.fold:hover td { color: var(--text); }
     NEW: 'still has something to ship', PARTIAL: 'part of it is already on base',
     SHIPPED: 'content already on base', PATCH_EQUIVALENT: 'same patch is on base',
   };
-  const state = { tab: 'commits', classes: new Set(), q: '', kind: '', hide: false, open: new Set(), allOpen: false };
+  const state = { owner: '', tab: 'commits', classes: new Set(), q: '', kind: '', hide: false, open: new Set(), allOpen: false };
 
   const h = (tag, attrs = {}, ...kids) => {
     const el = document.createElement(tag);
@@ -201,13 +203,19 @@ table.sbs tr.fold:hover td { color: var(--text); }
       h('span', { class: 'add' }, '+' + t.insertions), ' ', h('span', { class: 'del' }, '−' + t.deletions)),
     h('span', {}, h('b', {}, String(t.files_already_on_base)), ' files already on base'),
     h('span', {}, h('b', {}, String(t.listed)), ' commits to list in the PR'));
+  if (t.risky_files) facts.append(h('span', {}, h('b', {}, String(t.risky_files)), ' files need a closer look'));
   if (R.revert_pairs.length) facts.append(h('span', {}, h('b', {}, String(R.revert_pairs.length)), ' revert pair(s)'));
 
   const cf = document.getElementById('conflicts');
   if (R.conflicts.length) {
     cf.append(h('div', { class: 'banner', role: 'alert' },
       h('b', {}, `${R.conflicts.length} conflicted file(s)` + (R.conflicts_best_effort ? ' (best effort, old git)' : '')),
-      h('ul', {}, R.conflicts.map((p) => h('li', {}, h('code', {}, p))))));
+      h('ul', {}, R.conflicts.map((p) => {
+        const d = (R.conflict_details || []).find((x) => x.path === p);
+        return h('li', {}, h('code', {}, p), d ? h('div', { class: 'meta', style: 'white-space:normal' },
+          'this PR: ' + (d.head_commits.map(short).join(', ') || '–') + ' · ' + R.base.name + ': ' +
+          (d.base_commits.map((c) => `${short(c.sha)} ${c.subject} (${c.author})`).join('; ') || '–')) : null);
+      }))));
   } else {
     cf.append(h('div', { class: 'banner ok' }, 'No merge conflicts between base and head.'));
   }
@@ -412,6 +420,8 @@ table.sbs tr.fold:hover td { color: var(--text); }
         h('span', { class: 'badge ' + f.state }, f.state === 'NEW_TO_BASE' ? 'New to base' : 'Already on base'),
         h('span', { class: 'chg' }, f.change),
         h('code', { class: 'subject', title: f.path }, f.old_path ? `${f.old_path} → ${f.path}` : f.path),
+        (f.risk || []).map((x) => h('span', { class: 'badge risk', title: 'Worth a closer look' }, x)),
+        f.owners && f.owners.length ? h('span', { class: 'meta wide', title: 'CODEOWNERS' }, f.owners.join(' ')) : null,
         f.binary ? h('span', { class: 'meta' }, 'binary')
           : h('span', { class: 'meta' }, h('span', { class: 'add' }, '+' + (f.insertions ?? 0)), ' ', h('span', { class: 'del' }, '−' + (f.deletions ?? 0))),
         h('span', { class: 'meta wide' }, `${touching.length} commit${touching.length === 1 ? '' : 's'}`)),
@@ -432,6 +442,7 @@ table.sbs tr.fold:hover td { color: var(--text); }
   function render() {
     for (const k of ['commits', 'files']) document.getElementById('tab-' + k).setAttribute('aria-selected', String(state.tab === k));
     document.getElementById('kind').classList.toggle('hidden', state.tab !== 'commits');
+    document.getElementById('owner').classList.toggle('hidden', state.tab !== 'files' || !(R.owners_summary || []).length);
     const q = state.q.toLowerCase();
     const list = document.getElementById('list');
     list.replaceChildren();
@@ -445,7 +456,8 @@ table.sbs tr.fold:hover td { color: var(--text); }
       list.append(...shown.map(commitEl));
     } else {
       shown = R.net_files.filter((f) =>
-        (!state.hide || f.state === 'NEW_TO_BASE') && (!q || f.path.toLowerCase().includes(q)));
+        (!state.hide || f.state === 'NEW_TO_BASE') && (!q || f.path.toLowerCase().includes(q)) &&
+        (!state.owner || (f.owners || []).includes(state.owner)));
       list.append(...shown.map(netEl));
     }
     if (!shown.length) list.append(h('div', { class: 'empty' }, 'Nothing matches the current filters.'));
@@ -454,6 +466,10 @@ table.sbs tr.fold:hover td { color: var(--text); }
   document.getElementById('tab-commits').onclick = () => { state.tab = 'commits'; render(); };
   document.getElementById('tab-files').onclick = () => { state.tab = 'files'; render(); };
   document.getElementById('q').addEventListener('input', (e) => { state.q = e.target.value; render(); });
+  const ownerSel = document.getElementById('owner');
+  ownerSel.append(h('option', { value: '' }, 'All owners'),
+    ...(R.owners_summary || []).map((o) => h('option', { value: o.owner }, `${o.owner} (${o.files})`)));
+  ownerSel.addEventListener('change', (e) => { state.owner = e.target.value; render(); });
   document.getElementById('kind').addEventListener('change', (e) => { state.kind = e.target.value; render(); });
   document.getElementById('hide').addEventListener('change', (e) => { state.hide = e.target.checked; render(); });
   document.getElementById('expand').addEventListener('click', (e) => {

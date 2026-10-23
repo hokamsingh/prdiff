@@ -98,6 +98,36 @@ pub struct NetFile {
     pub deletions: Option<u64>,
     pub binary: bool,
     pub submodule: bool,
+    /// Why this file deserves a second look: migration, lockfile, large-diff, hot-file, ...
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub risk: Vec<String>,
+    /// CODEOWNERS owners for this path.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub owners: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct OwnerSummary {
+    pub owner: String,
+    /// NEW_TO_BASE files this owner has to review.
+    pub files: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct BaseCommit {
+    pub sha: String,
+    pub subject: String,
+    pub author: String,
+}
+
+/// Who touched a conflicted file on each side.
+#[derive(Debug, Clone, Serialize)]
+pub struct ConflictDetail {
+    pub path: String,
+    /// Head-only commits touching it.
+    pub head_commits: Vec<String>,
+    /// Newest commits on base since the merge-base touching it.
+    pub base_commits: Vec<BaseCommit>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -120,6 +150,8 @@ pub struct Totals {
     pub insertions: u64,
     pub deletions: u64,
     pub conflicted_files: usize,
+    /// NEW_TO_BASE files with at least one risk flag.
+    pub risky_files: usize,
 }
 
 impl Totals {
@@ -164,6 +196,7 @@ impl Totals {
             match f.state {
                 NetState::NewToBase => {
                     t.files_new_to_base += 1;
+                    t.risky_files += !f.risk.is_empty() as usize;
                     t.insertions += f.insertions.unwrap_or(0);
                     t.deletions += f.deletions.unwrap_or(0);
                 }
@@ -192,6 +225,10 @@ pub struct Report {
     pub net_files: Vec<NetFile>,
     pub revert_pairs: Vec<RevertPair>,
     pub conflicts: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub conflict_details: Vec<ConflictDetail>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub owners_summary: Vec<OwnerSummary>,
     /// Both versions of each changed file (only populated for `prdiff view`).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub file_sides: Vec<crate::sides::FileSides>,

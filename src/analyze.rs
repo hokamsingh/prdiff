@@ -2,6 +2,7 @@
 
 use crate::cache::Cache;
 use crate::classify::{self, Blobs, Settings};
+use crate::codeowners::Owners;
 use crate::commits::{self, Commit};
 use crate::conflicts;
 use crate::git::Git;
@@ -11,6 +12,7 @@ use crate::net;
 use crate::patchid::{self, Scope};
 use crate::refs;
 use crate::report::*;
+use crate::risk::RiskRules;
 use anyhow::Result;
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -27,6 +29,10 @@ pub struct Options {
     pub exclude: Vec<String>,
     /// Treat whitespace-only differences as no difference.
     pub ignore_whitespace: bool,
+    /// Extra globs to flag as risky.
+    pub risky: Vec<String>,
+    /// Read CODEOWNERS from base and attach owners to files.
+    pub owners: bool,
     pub strict: bool,
     /// Hunk analysis for NEW commits too (default). Off = only PARTIAL commits, as in the LLD.
     pub deep: bool,
@@ -52,6 +58,8 @@ impl Options {
             paths: vec![],
             exclude: vec![],
             ignore_whitespace: false,
+            risky: vec![],
+            owners: true,
             strict: false,
             deep: true,
             include_empty: false,
@@ -208,9 +216,26 @@ pub fn analyze(o: &Options) -> Result<Report> {
         }
     }
 
+    let risk = RiskRules::new(&o.risky)?;
+    let owners = if o.owners {
+        Owners::load(&git, &base.sha)
+    } else {
+        None
+    };
     let net_files = t.stage("net", || {
-        net::build(&net_raw, &blobs, &filter, &reports, o.ignore_whitespace)
+        net::build(
+            &net_raw,
+            &blobs,
+            &filter,
+            &reports,
+            &net::NetSettings {
+                ignore_ws: o.ignore_whitespace,
+                risk: &risk,
+                owners: owners.as_ref(),
+            },
+        )
     });
+    let owners_summary = summarize_owners(&net_files);
 
     let file_sides = if o.detail.is_some() && o.sides_budget > 0 {
         t.stage("sides", || {
@@ -225,6 +250,14 @@ pub fn analyze(o: &Options) -> Result<Report> {
         .into_iter()
         .filter(|p| filter.matches(p))
         .collect();
+
+    let conflict_details = if conflicts.is_empty() {
+        Vec::new()
+    } else {
+        t.stage("attribution", || {
+            conflicts::attribute(&git, &merge_base, &base.sha, &conflicts, &reports)
+        })
+    };
 
     let listed: HashSet<&str> = reports.iter().map(|r| r.sha.as_str()).collect();
     let revert_pairs: Vec<RevertPair> = reports
@@ -249,6 +282,8 @@ pub fn analyze(o: &Options) -> Result<Report> {
         net_files,
         revert_pairs,
         conflicts,
+        conflict_details,
+        owners_summary,
         file_sides,
         conflicts_best_effort: conflict_res.best_effort,
         totals,
@@ -271,4 +306,23 @@ pub fn conflicts_only(o: &Options) -> Result<(refs::RefInfo, refs::RefInfo, Vec<
     )?;
     let paths = c.paths.into_iter().filter(|p| filter.matches(p)).collect();
     Ok((base, head, paths, c.best_effort))
+}
+
+/// Files to review per owner, most files first.
+fn summarize_owners(net: &[NetFile]) -> Vec<OwnerSummary> {
+    let mut counts: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
+    for f in net.iter().filter(|f| f.state == NetState::NewToBase) {
+        for o in &f.owners {
+            *counts.entry(o.as_str()).or_default() += 1;
+        }
+    }
+    let mut v: Vec<OwnerSummary> = counts
+        .into_iter()
+        .map(|(owner, files)| OwnerSummary {
+            owner: owner.to_string(),
+            files,
+        })
+        .collect();
+    v.sort_by(|a, b| b.files.cmp(&a.files).then_with(|| a.owner.cmp(&b.owner)));
+    v
 }

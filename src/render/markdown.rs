@@ -60,7 +60,67 @@ pub fn render(r: &Report, title: Option<&str>) -> String {
                 .join(", ")
         );
     }
+    for d in &r.conflict_details {
+        let head: Vec<String> = d
+            .head_commits
+            .iter()
+            .map(|c| format!("`{}`", &c[..7]))
+            .collect();
+        let base: Vec<String> = d
+            .base_commits
+            .iter()
+            .map(|c| format!("`{}` {} ({})", &c.sha[..7], c.subject, c.author))
+            .collect();
+        let _ = writeln!(
+            s,
+            "  - `{}`: this PR {}; target {}",
+            d.path,
+            if head.is_empty() {
+                "-".into()
+            } else {
+                head.join(", ")
+            },
+            if base.is_empty() {
+                "-".into()
+            } else {
+                base.join("; ")
+            }
+        );
+    }
+    if t.risky_files > 0 {
+        let _ = writeln!(s, "- Files that need a closer look: {}", t.risky_files);
+    }
     s.push('\n');
+    if !r.owners_summary.is_empty() {
+        let who: Vec<String> = r
+            .owners_summary
+            .iter()
+            .map(|o| {
+                format!(
+                    "{} ({} file{})",
+                    o.owner,
+                    o.files,
+                    if o.files == 1 { "" } else { "s" }
+                )
+            })
+            .collect();
+        let _ = writeln!(s, "**Review needed from:** {}\n", who.join(", "));
+    }
+    let risky: Vec<_> = r
+        .net_files
+        .iter()
+        .filter(|f| f.state == crate::report::NetState::NewToBase && !f.risk.is_empty())
+        .collect();
+    if !risky.is_empty() {
+        let _ = writeln!(s, "**Look closely at**");
+        for f in risky.iter().take(15) {
+            let _ = writeln!(s, "- `{}`: {}", f.path, f.risk.join(", "));
+        }
+        if risky.len() > 15 {
+            let _ = writeln!(s, "- … and {} more", risky.len() - 15);
+        }
+        s.push('\n');
+    }
 
     let listed: Vec<&CommitReport> = r.commits.iter().filter(|c| c.class.is_listed()).collect();
     section(

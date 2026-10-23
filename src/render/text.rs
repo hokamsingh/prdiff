@@ -49,7 +49,14 @@ pub fn render(r: &Report) -> String {
             (Some(a), Some(d)) => format!("+{a} -{d}"),
             _ => "binary".to_string(),
         };
-        let _ = writeln!(s, "  {} {}  {stat}", f.change, f.path);
+        let mut extra = String::new();
+        if !f.risk.is_empty() {
+            extra += &format!("  [{}]", f.risk.join(","));
+        }
+        if !f.owners.is_empty() {
+            extra += &format!("  {}", f.owners.join(" "));
+        }
+        let _ = writeln!(s, "  {} {}  {stat}{extra}", f.change, f.path);
     }
     if r.conflicts.is_empty() {
         let _ = writeln!(s, "\nconflicts: none");

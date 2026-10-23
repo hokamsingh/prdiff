@@ -51,6 +51,14 @@ fn to_regex(glob: &str) -> String {
     if !g.contains('/') {
         re.push_str("(?:.*/)?");
     }
+    re.push_str(&body(&g));
+    re.push('$');
+    re
+}
+
+/// Translate glob characters only: `**` any depth, `*` and `?` within one path segment.
+pub fn body(g: &str) -> String {
+    let mut re = String::new();
     let chars: Vec<char> = g.chars().collect();
     let mut i = 0;
     while i < chars.len() {
@@ -70,6 +78,5 @@ fn to_regex(glob: &str) -> String {
         }
         i += 1;
     }
-    re.push('$');
     re
 }

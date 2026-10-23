@@ -50,6 +50,9 @@ struct Common {
     /// Leave files matching this glob out of file lists and stats (repeatable), e.g. lockfiles.
     #[arg(long = "exclude")]
     excludes: Vec<String>,
+    /// Do not read CODEOWNERS.
+    #[arg(long)]
+    no_owners: bool,
     /// Treat whitespace-only differences as no difference.
     #[arg(short = 'w', long)]
     ignore_whitespace: bool,
@@ -174,6 +177,8 @@ fn options(cli: &Cli, c: &Common) -> Result<(Options, Config)> {
     };
     o.exclude = cfg.exclude.iter().chain(&c.excludes).cloned().collect();
     o.ignore_whitespace = c.ignore_whitespace || cfg.ignore_whitespace;
+    o.risky = cfg.risky.clone();
+    o.owners = !c.no_owners;
     o.strict = c.strict;
     o.deep = !c.shallow;
     o.include_empty = c.include_empty;

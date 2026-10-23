@@ -204,3 +204,60 @@ fn disjoint(git: &Git, mb: &str, base: &str, head: &str) -> Result<bool> {
     };
     Ok(!(clash(&b, &h) || clash(&h, &b)))
 }
+
+/// For each conflicted file: the head-only commits and the newest base commits (since the merge-base)
+/// that touched it. Capped so a mass conflict stays cheap.
+pub fn attribute(
+    git: &Git,
+    merge_base: &str,
+    base: &str,
+    paths: &[String],
+    head_commits: &[crate::report::CommitReport],
+) -> Vec<crate::report::ConflictDetail> {
+    use crate::report::{BaseCommit, ConflictDetail};
+    use rayon::prelude::*;
+    let range = format!("{merge_base}..{base}");
+    paths
+        .par_iter()
+        .take(50)
+        .map(|path| {
+            let log = git
+                .run(&[
+                    "log",
+                    "--no-merges",
+                    "-n",
+                    "5",
+                    "--format=%H%x1f%an%x1f%s",
+                    &range,
+                    "--",
+                    path,
+                ])
+                .unwrap_or_default();
+            let base_commits = String::from_utf8_lossy(&log)
+                .lines()
+                .filter_map(|l| {
+                    let mut f = l.split('\x1f');
+                    Some(BaseCommit {
+                        sha: f.next()?.to_string(),
+                        author: f.next()?.to_string(),
+                        subject: f.next()?.to_string(),
+                    })
+                })
+                .collect();
+            let head_commits = head_commits
+                .iter()
+                .filter(|c| {
+                    c.files
+                        .iter()
+                        .any(|f| f.path == *path || f.old_path.as_deref() == Some(path))
+                })
+                .map(|c| c.sha.clone())
+                .collect();
+            ConflictDetail {
+                path: path.clone(),
+                head_commits,
+                base_commits,
+            }
+        })
+        .collect()
+}
