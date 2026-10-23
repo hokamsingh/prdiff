@@ -1,7 +1,10 @@
 [package]
 name = "prdiff"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
+description = "Real-diff checker for PR descriptions: what actually changes when head lands on base"
+repository = "https://github.com/hokamsingh/prdiff"
+readme = "README.md"
 
 [dependencies]
 anyhow = "1.0.104"
@@ -16,3 +19,7 @@ similar = "3.2.0"
 tempfile = "3.27.0"
 thiserror = "2.0.21"
 toml = "1.1.8"
+
+[profile.release]
+strip = true
+lto = "thin"

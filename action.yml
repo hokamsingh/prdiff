@@ -1,0 +1,47 @@
+name: prdiff
+description: Check, publish or summarise what a pull request really changes (by content, not commit subject).
+branding:
+  icon: git-pull-request
+  color: blue
+inputs:
+  mode:
+    description: "check (fail if the PR description is stale), body (write the description into the PR body), comment (sticky PR comment), summary (job summary only)"
+    default: check
+  pr:
+    description: "Pull request number. Default: the PR that triggered the workflow."
+    default: ${{ github.event.pull_request.number }}
+  version:
+    description: "prdiff release to install (e.g. v0.2.0), or latest."
+    default: latest
+  args:
+    description: "Extra arguments for prdiff, e.g. --exclude Cargo.lock"
+    default: ""
+runs:
+  using: composite
+  steps:
+    - name: install prdiff
+      shell: bash
+      env:
+        PRDIFF_VERSION: ${{ inputs.version }}
+        PRDIFF_BIN_DIR: ${{ runner.temp }}/prdiff-bin
+      run: |
+        curl -fsSL "https://raw.githubusercontent.com/hokamsingh/prdiff/main/install.sh" | sh
+        echo "$PRDIFF_BIN_DIR" >> "$GITHUB_PATH"
+    - name: prdiff
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        PR: ${{ inputs.pr }}
+        MODE: ${{ inputs.mode }}
+        EXTRA: ${{ inputs.args }}
+      run: |
+        set -euo pipefail
+        [ -n "$PR" ] || { echo "::error::no pull request number (run on pull_request events or pass 'pr')"; exit 2; }
+        # shellcheck disable=SC2086
+        case "$MODE" in
+          check)   prdiff check --pr "$PR" $EXTRA ;;
+          body)    prdiff publish --pr "$PR" --mode body $EXTRA ;;
+          comment) prdiff publish --pr "$PR" --mode comment $EXTRA ;;
+          summary) prdiff describe --pr "$PR" $EXTRA | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}" ;;
+          *) echo "::error::unknown mode '$MODE'"; exit 2 ;;
+        esac

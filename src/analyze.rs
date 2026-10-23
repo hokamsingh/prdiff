@@ -115,9 +115,14 @@ pub fn analyze(o: &Options) -> Result<Report> {
     let filter = PathFilter::with_excludes(&o.paths, &o.exclude)?;
 
     let (base, head, merge_base) = t.stage("refs", || -> Result<_> {
-        refs::ensure_not_shallow(&git)?;
-        let base = refs::resolve(&git, &o.base)?;
-        let mut head = refs::resolve(&git, &o.head)?;
+        let (base, mut head) = match refs::resolve_pair(&git, &o.base, &o.head)? {
+            Some(pair) => pair,
+            // slow path, only to produce the precise error (shallow clone, unknown ref)
+            None => {
+                refs::ensure_not_shallow(&git)?;
+                (refs::resolve(&git, &o.base)?, refs::resolve(&git, &o.head)?)
+            }
+        };
         let mb = refs::merge_base(&git, &base, &head)?;
         if let Some(label) = &o.head_label {
             head.name = label.clone();
@@ -192,20 +197,40 @@ pub fn analyze(o: &Options) -> Result<Report> {
         })
         .map(|(i, _)| i)
         .collect();
-    t.stage("hunks", || {
-        hunks::analyze(
-            &git,
-            &kept,
-            &mut reports,
-            &targets,
-            &blobs,
-            &hunks::HunkSettings {
-                promote_partial: !o.strict,
-                detail: o.detail,
-                ignore_ws: o.ignore_whitespace,
-            },
-        )
-    })?;
+    let conflicts: Vec<String> = conflict_res
+        .paths
+        .into_iter()
+        .filter(|p| filter.matches(p))
+        .collect();
+    // hunk analysis and the base-side conflict log are independent: run them side by side
+    let (hunk_res, conflict_base) = rayon::join(
+        || {
+            t.stage("hunks", || {
+                hunks::analyze(
+                    &git,
+                    &kept,
+                    &mut reports,
+                    &targets,
+                    &blobs,
+                    &hunks::HunkSettings {
+                        promote_partial: !o.strict,
+                        detail: o.detail,
+                        ignore_ws: o.ignore_whitespace,
+                    },
+                )
+            })
+        },
+        || {
+            if conflicts.is_empty() {
+                Default::default()
+            } else {
+                t.stage("attribution", || {
+                    conflicts::base_side(&git, &merge_base, &base.sha, &conflicts)
+                })
+            }
+        },
+    );
+    hunk_res?;
     if o.detail.is_some() {
         // Already on base by definition, whatever the in-memory hunk matcher says.
         for r in &mut reports {
@@ -251,18 +276,10 @@ pub fn analyze(o: &Options) -> Result<Report> {
         Vec::new()
     };
 
-    let conflicts: Vec<String> = conflict_res
-        .paths
-        .into_iter()
-        .filter(|p| filter.matches(p))
-        .collect();
-
     let conflict_details = if conflicts.is_empty() {
         Vec::new()
     } else {
-        t.stage("attribution", || {
-            conflicts::attribute(&git, &merge_base, &base.sha, &conflicts, &reports)
-        })
+        conflicts::attribute(&conflicts, conflict_base, &reports)
     };
 
     let listed: HashSet<&str> = reports.iter().map(|r| r.sha.as_str()).collect();

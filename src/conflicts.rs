@@ -205,59 +205,76 @@ fn disjoint(git: &Git, mb: &str, base: &str, head: &str) -> Result<bool> {
     Ok(!(clash(&b, &h) || clash(&h, &b)))
 }
 
-/// For each conflicted file: the head-only commits and the newest base commits (since the merge-base)
-/// that touched it. Capped so a mass conflict stays cheap.
-pub fn attribute(
+/// The newest base commits (since the merge-base) touching each conflicted file, from one `git log` for all
+/// of them (capped at 50 files). Independent of the head side, so it can run alongside other work.
+pub fn base_side(
     git: &Git,
     merge_base: &str,
     base: &str,
     paths: &[String],
+) -> std::collections::HashMap<String, Vec<crate::report::BaseCommit>> {
+    use crate::report::BaseCommit;
+    use std::collections::HashMap;
+    let paths: Vec<&String> = paths.iter().take(50).collect();
+    let range = format!("{merge_base}..{base}");
+    let mut args: Vec<&str> = vec![
+        "-c",
+        "core.quotePath=false",
+        "log",
+        "--no-merges",
+        "--name-only",
+        "--format=%x1e%H%x1f%an%x1f%s",
+        &range,
+        "--",
+    ];
+    args.extend(paths.iter().map(|p| p.as_str()));
+    let log = git.run(&args).unwrap_or_default();
+    let mut per_path: HashMap<String, Vec<BaseCommit>> = HashMap::new();
+    let text = String::from_utf8_lossy(&log).into_owned();
+    for rec in text.split('\x1e').skip(1) {
+        let mut lines = rec.lines();
+        let mut f = lines.next().unwrap_or("").split('\x1f');
+        let (Some(sha), Some(author), Some(subject)) = (f.next(), f.next(), f.next()) else {
+            continue;
+        };
+        for name in lines.filter(|l| !l.is_empty()) {
+            if let Some(p) = paths.iter().find(|p| p.as_str() == name) {
+                let list = per_path.entry((*p).clone()).or_default();
+                if list.len() < 5 {
+                    list.push(BaseCommit {
+                        sha: sha.to_string(),
+                        author: author.to_string(),
+                        subject: subject.to_string(),
+                    });
+                }
+            }
+        }
+    }
+    per_path
+}
+
+/// Combine both sides: head-only commits from the report, base commits from [`base_side`].
+pub fn attribute(
+    paths: &[String],
+    mut base_commits: std::collections::HashMap<String, Vec<crate::report::BaseCommit>>,
     head_commits: &[crate::report::CommitReport],
 ) -> Vec<crate::report::ConflictDetail> {
-    use crate::report::{BaseCommit, ConflictDetail};
-    use rayon::prelude::*;
-    let range = format!("{merge_base}..{base}");
+    use crate::report::ConflictDetail;
     paths
-        .par_iter()
+        .iter()
         .take(50)
-        .map(|path| {
-            let log = git
-                .run(&[
-                    "log",
-                    "--no-merges",
-                    "-n",
-                    "5",
-                    "--format=%H%x1f%an%x1f%s",
-                    &range,
-                    "--",
-                    path,
-                ])
-                .unwrap_or_default();
-            let base_commits = String::from_utf8_lossy(&log)
-                .lines()
-                .filter_map(|l| {
-                    let mut f = l.split('\x1f');
-                    Some(BaseCommit {
-                        sha: f.next()?.to_string(),
-                        author: f.next()?.to_string(),
-                        subject: f.next()?.to_string(),
-                    })
-                })
-                .collect();
-            let head_commits = head_commits
+        .map(|path| ConflictDetail {
+            path: path.clone(),
+            head_commits: head_commits
                 .iter()
                 .filter(|c| {
                     c.files
                         .iter()
-                        .any(|f| f.path == *path || f.old_path.as_deref() == Some(path))
+                        .any(|f| f.path == *path || f.old_path.as_deref() == Some(path.as_str()))
                 })
                 .map(|c| c.sha.clone())
-                .collect();
-            ConflictDetail {
-                path: path.clone(),
-                head_commits,
-                base_commits,
-            }
+                .collect(),
+            base_commits: base_commits.remove(path.as_str()).unwrap_or_default(),
         })
         .collect()
 }

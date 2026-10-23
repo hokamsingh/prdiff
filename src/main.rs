@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use clap::{Args, Parser, Subcommand, ValueEnum};
+use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use prdiff::analyze::{Options, analyze, conflicts_only};
 use prdiff::config::{self, Config};
 use prdiff::error::{Error, bad};
@@ -198,6 +198,10 @@ enum Cmd {
         #[arg(long, value_enum, default_value_t = Format::Text)]
         format: Format,
     },
+    /// Print shell completions (bash, zsh, fish, powershell, elvish).
+    Completions { shell: clap_complete::Shell },
+    /// Print the man page (roff) to stdout.
+    Man,
     /// Where does a commit stand per environment? e.g. `prdiff where abc1234 --env production=origin/production`.
     Where {
         /// A revision, or `#123` for the commit mentioning that PR (searched in --head).
@@ -542,6 +546,19 @@ fn run(cli: Cli) -> Result<()> {
             } else {
                 print!("{}", rewrite::render_text(&r));
             }
+            Ok(())
+        }
+        Cmd::Completions { shell } => {
+            clap_complete::generate(
+                *shell,
+                &mut Cli::command(),
+                "prdiff",
+                &mut std::io::stdout(),
+            );
+            Ok(())
+        }
+        Cmd::Man => {
+            clap_mangen::Man::new(Cli::command()).render(&mut std::io::stdout())?;
             Ok(())
         }
         Cmd::Where {

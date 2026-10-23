@@ -12,11 +12,17 @@ const LOCATIONS: [&str; 3] = [".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNE
 impl Owners {
     /// The CODEOWNERS file as it is on `rev`, if there is one.
     pub fn load(git: &Git, rev: &str) -> Option<Owners> {
-        LOCATIONS.iter().find_map(|loc| {
-            let spec = format!("{rev}:{loc}");
-            let out = git.exec(&["show", &spec], None, &[]).ok()?;
-            (out.code == 0).then(|| Owners::parse(&String::from_utf8_lossy(&out.stdout)))
-        })
+        // one process tells which of the usual locations exist; only then read the first of them
+        let mut args = vec!["ls-tree", "--name-only", rev, "--"];
+        args.extend(LOCATIONS);
+        let out = git.exec(&args, None, &[]).ok()?;
+        let present = String::from_utf8_lossy(&out.stdout).into_owned();
+        let loc = LOCATIONS
+            .iter()
+            .find(|l| present.lines().any(|p| p == **l))?;
+        let spec = format!("{rev}:{loc}");
+        let out = git.exec(&["cat-file", "blob", &spec], None, &[]).ok()?;
+        (out.code == 0).then(|| Owners::parse(&String::from_utf8_lossy(&out.stdout)))
     }
 
     pub fn parse(text: &str) -> Owners {

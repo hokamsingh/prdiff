@@ -37,6 +37,31 @@ pub fn merge_base(git: &Git, base: &RefInfo, head: &RefInfo) -> Result<String> {
     }
 }
 
+/// Shallow check plus both refs in a single `git rev-parse`. `None` means "use the slow path for an
+/// accurate error" (a shallow repository or an unknown ref).
+pub fn resolve_pair(git: &Git, base: &str, head: &str) -> Result<Option<(RefInfo, RefInfo)>> {
+    let (b, h) = (format!("{base}^{{commit}}"), format!("{head}^{{commit}}"));
+    let out = git.exec(&["rev-parse", "--is-shallow-repository", &b, &h], None, &[])?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut lines = text.lines();
+    if out.code != 0 || lines.next() != Some("false") {
+        return Ok(None);
+    }
+    match (lines.next(), lines.next()) {
+        (Some(bs), Some(hs)) if bs.len() >= 40 && hs.len() >= 40 => Ok(Some((
+            RefInfo {
+                name: base.to_string(),
+                sha: bs.to_string(),
+            },
+            RefInfo {
+                name: head.to_string(),
+                sha: hs.to_string(),
+            },
+        ))),
+        _ => Ok(None),
+    }
+}
+
 /// A shallow clone has no reliable merge base or history to compare.
 pub fn ensure_not_shallow(git: &Git) -> Result<()> {
     if git.text(&["rev-parse", "--is-shallow-repository"])? == "true" {
