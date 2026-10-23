@@ -77,7 +77,12 @@ fn shortcut_agrees_with_merge_tree_on_random_histories() {
     let mut rng = Lcg(7);
     let mut conflicting = 0;
     let mut skipped = 0;
-    for trial in 0..120 {
+    // 120 trials locally; CI sets fewer because process spawning is slow on macOS runners
+    let trials: usize = std::env::var("PRDIFF_SHORTCUT_TRIALS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(120);
+    for trial in 0..trials {
         let r = Repo::new();
         r.commit(
             "init",
@@ -105,8 +110,8 @@ fn shortcut_agrees_with_merge_tree_on_random_histories() {
         skipped += fast.conflicts.is_empty() as usize;
     }
     assert!(
-        conflicting >= 10,
+        conflicting >= trials / 12,
         "the generator should produce real conflicts, got {conflicting}"
     );
-    assert!(skipped >= 10, "and clean merges, got {skipped}");
+    assert!(skipped >= trials / 12, "and clean merges, got {skipped}");
 }

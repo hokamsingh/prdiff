@@ -89,7 +89,8 @@ pub fn resolve_commit(git: &Git, rev: &str, search_in: &str) -> Result<String> {
         .or_else(|| rev.strip_prefix("PR"))
         .filter(|n| n.chars().all(|c| c.is_ascii_digit()) && !n.is_empty());
     if let Some(n) = pr {
-        let pat = format!("#{n}\\b");
+        // POSIX ERE (macOS libc has no `\b`): the number must not be followed by another digit
+        let pat = format!("#{n}([^0-9]|$)");
         let out = git.run(&[
             "log",
             "-n",
