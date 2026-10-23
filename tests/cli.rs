@@ -257,3 +257,126 @@ fn view_writes_a_file_and_leaves_compare_output_unchanged() {
         "hunk_details only appear in view mode"
     );
 }
+
+fn view_json(r: &Repo, extra: &[&str]) -> serde_json::Value {
+    let mut args = vec![
+        "view", "--base", "staging", "--head", "develop", "--out", "-",
+    ];
+    args.extend_from_slice(extra);
+    let out = bin(r, &args);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let html = String::from_utf8(out.stdout).unwrap();
+    let open = "<script id=\"data\" type=\"application/json\">";
+    let start = html.find(open).unwrap() + open.len();
+    let end = start + html[start..].find("</script>").unwrap();
+    serde_json::from_str(&html[start..end]).unwrap()
+}
+
+#[test]
+fn side_by_side_has_the_targets_current_file_and_the_merging_branchs_file() {
+    let body: String = (1..=20).map(|i| format!("line {i}\n")).collect();
+    let r = Repo::with_branches(&[
+        ("index.js", &body),
+        ("old.js", "a\nb\nc\nd\ne\nf\ng\nh\n"),
+        ("gone.js", "bye\n"),
+        ("img.bin", "x"),
+    ]);
+    r.write_bytes("img.bin", &[0, 1, 2]);
+    r.git(&["add", "-A"]);
+    r.git(&["commit", "-q", "-m", "chore: bin"]);
+    r.git(&["branch", "-f", "staging", "HEAD"]);
+    r.git(&["branch", "-f", "develop", "HEAD"]);
+
+    r.checkout("develop");
+    r.write("index.js", &body.replace("line 5\n", "line five\n"));
+    r.write("new.ts", "export const x = 1;\n");
+    r.write_bytes("img.bin", &[0, 1, 3]);
+    r.git(&["mv", "old.js", "renamed.js"]);
+    r.git(&["rm", "-q", "gone.js"]);
+    r.git(&["add", "-A"]);
+    r.git(&["commit", "-q", "-m", "fix: pr work"]);
+    // the target moved on after the branch was cut
+    r.checkout("staging");
+    r.commit(
+        "chore: target moves",
+        &[("index.js", &body.replace("line 15\n", "line fifteen\n"))],
+    );
+
+    let v = view_json(&r, &[]);
+    let sides = v["file_sides"].as_array().unwrap();
+    let by = |p: &str| {
+        sides
+            .iter()
+            .find(|s| s["path"] == p)
+            .unwrap_or_else(|| panic!("no sides for {p}"))
+    };
+
+    let idx = by("index.js");
+    // left is the target's *current* content, so it has the target's own later edit
+    assert!(idx["base_text"].as_str().unwrap().contains("line fifteen"));
+    assert!(idx["head_text"].as_str().unwrap().contains("line five"));
+    // ops cover exactly both files
+    let (mut old_n, mut new_n) = (0, 0);
+    for op in idx["ops"].as_array().unwrap() {
+        let op: Vec<u64> = op
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x.as_u64().unwrap())
+            .collect();
+        if op[0] != 2 {
+            old_n += op[2];
+        }
+        if op[0] != 1 {
+            new_n += op[4];
+        }
+    }
+    assert_eq!((old_n, new_n), (20, 20));
+
+    assert!(
+        by("new.ts")["base_text"].is_null(),
+        "added file: nothing on the left"
+    );
+    assert!(
+        by("gone.js")["head_text"].is_null(),
+        "deleted file: nothing on the right"
+    );
+    let ren = by("renamed.js");
+    assert_eq!(ren["old_path"], "old.js");
+    assert!(
+        ren["base_text"].as_str().unwrap().starts_with("a\nb"),
+        "left is the file under its old name"
+    );
+    assert!(
+        sides.iter().all(|s| s["path"] != "img.bin"),
+        "binary files get no viewer"
+    );
+
+    // the compare JSON is unaffected, and --no-sides keeps the report lean
+    assert!(view_json(&r, &["--no-sides"]).get("file_sides").is_none());
+    let cmp = bin(
+        &r,
+        &[
+            "compare", "--base", "staging", "--head", "develop", "--format", "json",
+        ],
+    );
+    assert!(!String::from_utf8_lossy(&cmp.stdout).contains("file_sides"));
+}
+
+#[test]
+fn oversized_files_get_a_note_instead_of_a_viewer() {
+    let r = Repo::with_branches(&[("big.txt", "x\n")]);
+    r.checkout("develop");
+    let big: String = "0123456789abcdef\n".repeat(40_000); // ~680 KB
+    r.commit("feat: big", &[("big.txt", &big)]);
+    let v = view_json(&r, &[]);
+    let s = &v["file_sides"][0];
+    assert_eq!(s["path"], "big.txt");
+    assert!(s["note"].as_str().unwrap().contains("too large"));
+    assert!(s["head_text"].is_null());
+}

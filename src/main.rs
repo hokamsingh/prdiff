@@ -117,6 +117,12 @@ enum Cmd {
         /// Show at most this many diff lines per file.
         #[arg(long, default_value_t = 400)]
         max_lines: usize,
+        /// Do not embed file contents (no side-by-side viewer); keeps the report small.
+        #[arg(long)]
+        no_sides: bool,
+        /// Most file content to embed for the side-by-side viewer, in MB.
+        #[arg(long, default_value_t = 8)]
+        max_embed_mb: usize,
     },
     /// Fail (exit 5) if a PR description lists stale commits or omits new ones.
     Check {
@@ -194,9 +200,16 @@ fn run(cli: Cli) -> Result<()> {
             out,
             open,
             max_lines,
+            no_sides,
+            max_embed_mb,
         } => {
             let mut o = options(&cli, c);
             o.detail = Some(*max_lines);
+            o.sides_budget = if *no_sides {
+                0
+            } else {
+                max_embed_mb * 1024 * 1024
+            };
             let r = analyze(&o)?;
             let html = render::view::render(&r);
             if out == "-" {

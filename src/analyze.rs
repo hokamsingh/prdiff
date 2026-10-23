@@ -31,6 +31,8 @@ pub struct Options {
     pub use_cache: bool,
     /// Collect displayable hunks (at most this many lines per file) for every commit, for `prdiff view`.
     pub detail: Option<usize>,
+    /// With `detail`: bytes of file content to embed for the side-by-side viewer (0 = none).
+    pub sides_budget: usize,
     /// Always run `git merge-tree` instead of first proving the sides are disjoint.
     pub exact_conflicts: bool,
     pub verbose: bool,
@@ -50,6 +52,7 @@ impl Options {
             scope: Scope::Auto,
             use_cache: true,
             detail: None,
+            sides_budget: 0,
             exact_conflicts: false,
             verbose: false,
             timeout: Duration::from_secs(300),
@@ -198,6 +201,14 @@ pub fn analyze(o: &Options) -> Result<Report> {
 
     let net_files = t.stage("net", || net::build(&net_raw, &blobs, &filter, &reports));
 
+    let file_sides = if o.detail.is_some() && o.sides_budget > 0 {
+        t.stage("sides", || {
+            crate::sides::collect(&git, &net_raw.entries, &net_files, &blobs, o.sides_budget)
+        })?
+    } else {
+        Vec::new()
+    };
+
     let conflicts: Vec<String> = conflict_res
         .paths
         .into_iter()
@@ -227,6 +238,7 @@ pub fn analyze(o: &Options) -> Result<Report> {
         net_files,
         revert_pairs,
         conflicts,
+        file_sides,
         conflicts_best_effort: conflict_res.best_effort,
         totals,
     })

@@ -86,6 +86,29 @@ code, .mono { font-family: var(--mono); font-size: 12.5px; }
 .links a { color: var(--new); cursor: pointer; text-decoration: underline; }
 .hidden { display: none !important; }
 button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--new); outline-offset: 1px; }
+.sbs-btn { font: inherit; font-size: 12px; border: 1px solid var(--border); background: var(--bg); color: var(--text); border-radius: 6px; padding: 2px 9px; cursor: pointer; white-space: nowrap; }
+.sbs-btn:hover { background: var(--surface); }
+.rowhead { display: flex; align-items: center; }
+.rowhead .head { flex: 1; min-width: 0; }
+.rowhead .sbs-btn { margin-right: 10px; }
+#modal { position: fixed; inset: 0; background: rgba(0,0,0,.55); z-index: 50; display: flex; padding: 3vh 2vw; }
+#modal .panel { background: var(--bg); border: 1px solid var(--border); border-radius: 10px; display: flex; flex-direction: column; width: 100%; min-height: 0; overflow: hidden; }
+.mh { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+.mh .title { flex: 1; min-width: 220px; word-break: break-all; }
+.mh .note { font-style: normal; font-size: 12px; }
+.mh label { color: var(--muted); display: flex; gap: 6px; align-items: center; }
+.scroll { overflow: auto; flex: 1; min-height: 0; }
+table.sbs { border-collapse: collapse; width: 100%; table-layout: fixed; font: 12px/1.5 var(--mono); }
+table.sbs th { position: sticky; top: 0; z-index: 1; background: var(--surface); border-bottom: 1px solid var(--border); padding: 6px 10px; text-align: left; font: 600 12.5px system-ui, sans-serif; }
+table.sbs th + th { border-left: 1px solid var(--border); }
+table.sbs td { vertical-align: top; padding: 0 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
+table.sbs td.ln { width: 48px; text-align: right; color: var(--muted); user-select: none; background: var(--surface); padding: 0 6px; }
+table.sbs td.code::after { content: "\200b"; }
+table.sbs td.d { background: var(--del-bg); } table.sbs td.a { background: var(--add-bg); }
+table.sbs td.empty { background: repeating-linear-gradient(135deg, transparent 0 6px, var(--surface) 6px 12px); }
+table.sbs td.code + td.ln { border-left: 1px solid var(--border); }
+table.sbs tr.fold td { background: var(--surface); color: var(--muted); text-align: center; cursor: pointer; padding: 4px; font-family: system-ui, sans-serif; }
+table.sbs tr.fold:hover td { color: var(--text); }
 @media (max-width: 640px) { .meta.wide { display: none; } .bar { width: 44px; } }
 </style>
 </head>
@@ -111,6 +134,18 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
   </div>
   <div id="list"></div>
 </main>
+<div id="modal" class="hidden" role="dialog" aria-modal="true" aria-labelledby="m-title">
+  <div class="panel">
+    <div class="mh">
+      <div class="title"><b id="m-title" class="mono"></b><div class="note" id="m-sub"></div></div>
+      <label><input type="checkbox" id="m-collapse" checked> Collapse unchanged</label>
+      <button class="sbs-btn" id="m-prev" title="Previous change">↑ Prev</button>
+      <button class="sbs-btn" id="m-next" title="Next change">↓ Next</button>
+      <button class="sbs-btn" id="m-close">Close (Esc)</button>
+    </div>
+    <div class="scroll" id="m-body"></div>
+  </div>
+</div>
 <script id="data" type="application/json">__PRDIFF_DATA__</script>
 <script>
 (() => {
@@ -180,6 +215,109 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
   const revertedBy = new Map(R.revert_pairs.map((p) => [p.reverted, p.revert]));
   const commitBySha = new Map(R.commits.map((c) => [c.sha, c]));
 
+  // side by side
+  const sidesBy = new Map((R.file_sides || []).map((x) => [x.path, x]));
+  const splitLines = (t) => (t == null || t === '' ? [] : (t.endsWith('\n') ? t.slice(0, -1) : t).split('\n'));
+  function sbsButton(path) {
+    if (!sidesBy.has(path)) return null;
+    return h('button', {
+      class: 'sbs-btn', title: `Compare ${R.base.name} with ${R.head.name}`,
+      onclick: (e) => { e.stopPropagation(); openSides(path, e.currentTarget); },
+    }, 'Side by side');
+  }
+  const modal = document.getElementById('modal');
+  const mBody = document.getElementById('m-body');
+  let opener = null, current = null;
+
+  function row(cls, l, r) {
+    const cell = (v, ln, side) => [
+      h('td', { class: 'ln' }, v == null ? '' : String(ln)),
+      h('td', { class: 'code ' + (v == null ? 'empty' : cls === 'diff' ? (side === 'l' ? 'd' : 'a') : '') }, v == null ? '' : v)];
+    return h('tr', { class: cls }, cell(l && l[0], l && l[1], 'l'), cell(r && r[0], r && r[1], 'r'));
+  }
+  function buildTable(s, collapse) {
+    const A = splitLines(s.base_text), B = splitLines(s.head_text);
+    const CTX = 3;
+    const tb = h('tbody');
+    const eq = (oi, ni, from, to) => {
+      const out = [];
+      for (let k = from; k < to; k++) out.push(row('eq', [A[oi + k], oi + k + 1], [B[ni + k], ni + k + 1]));
+      return out;
+    };
+    s.ops.forEach(([tag, oi, ol, ni, nl], idx) => {
+      if (tag === 0) {
+        const head = idx === 0 ? 0 : CTX, tail = idx === s.ops.length - 1 ? 0 : CTX;
+        if (collapse && ol > head + tail + 1) {
+          const hidden = ol - head - tail;
+          const fold = h('tr', { class: 'fold', title: 'Show these lines' },
+            h('td', { colspan: 4 }, `⋯ ${hidden} unchanged line${hidden === 1 ? '' : 's'} · click to expand`));
+          fold.addEventListener('click', () => fold.replaceWith(...eq(oi, ni, head, ol - tail)));
+          tb.append(...eq(oi, ni, 0, head), fold, ...eq(oi, ni, ol - tail, ol));
+        } else tb.append(...eq(oi, ni, 0, ol));
+      } else {
+        const n = Math.max(ol, nl);
+        for (let k = 0; k < n; k++) {
+          const tr = row('diff', k < ol ? [A[oi + k], oi + k + 1] : null, k < nl ? [B[ni + k], ni + k + 1] : null);
+          if (k === 0) tr.dataset.block = '1';
+          tb.append(tr);
+        }
+      }
+    });
+    const label = (name, role, sha, exists) => h('th', { colspan: 2 },
+      `${name} `, h('span', { class: 'note' }, `(${role}${exists ? '' : ', file does not exist here'})`));
+    return h('table', { class: 'sbs' },
+      h('colgroup', {}, h('col', { style: 'width:48px' }), h('col'), h('col', { style: 'width:48px' }), h('col')),
+      h('thead', {}, h('tr', {}, label(R.base.name, 'target, now', R.base.sha, s.base_text != null),
+        label(R.head.name, 'merging', R.head.sha, s.head_text != null))),
+      tb);
+  }
+  function renderModal() {
+    const s = current;
+    document.getElementById('m-title').textContent = s.old_path ? `${s.old_path} → ${s.path}` : s.path;
+    document.getElementById('m-sub').textContent =
+      `${R.base.name} @ ${short(R.base.sha)} (target, as it is now)  ⟷  ${R.head.name} @ ${short(R.head.sha)} (merging). ` +
+      `Lines that differ can also come from commits that reached ${R.base.name} after this branch was cut.`;
+    mBody.replaceChildren();
+    const nav = !s.note && s.ops.some((o) => o[0] !== 0);
+    document.getElementById('m-prev').disabled = document.getElementById('m-next').disabled = !nav;
+    if (s.note) {
+      mBody.append(h('div', { class: 'empty' }, `No side-by-side view: ${s.note}.`, h('br'),
+        h('code', {}, `git diff ${R.base.name}...${R.head.name} -- ${s.path}`)));
+    } else {
+      mBody.append(buildTable(s, document.getElementById('m-collapse').checked));
+      if (!nav) mBody.prepend(h('div', { class: 'note', style: 'padding:8px 12px' }, 'No line differences (mode change only).'));
+    }
+    mBody.scrollTop = 0;
+  }
+  function openSides(path, from) {
+    current = sidesBy.get(path); opener = from;
+    modal.classList.remove('hidden'); document.body.style.overflow = 'hidden';
+    renderModal(); document.getElementById('m-close').focus();
+  }
+  function closeSides() {
+    modal.classList.add('hidden'); document.body.style.overflow = ''; current = null;
+    if (opener && document.contains(opener)) opener.focus();
+  }
+  function jump(dir) {
+    const blocks = [...mBody.querySelectorAll('tr[data-block]')];
+    const sticky = mBody.querySelector('thead')?.offsetHeight || 0;
+    const top = mBody.scrollTop + sticky + 4;
+    const target = dir > 0 ? blocks.find((b) => b.offsetTop > top + 2) : [...blocks].reverse().find((b) => b.offsetTop < top - 2);
+    if (target) mBody.scrollTo({ top: target.offsetTop - sticky - 24, behavior: 'smooth' });
+  }
+  document.getElementById('m-close').addEventListener('click', closeSides);
+  modal.addEventListener('click', (e) => { if (e.target === modal) closeSides(); });
+  document.getElementById('m-collapse').addEventListener('change', () => current && renderModal());
+  document.getElementById('m-next').addEventListener('click', () => jump(1));
+  document.getElementById('m-prev').addEventListener('click', () => jump(-1));
+  modal.addEventListener('keydown', (e) => {
+    if (e.key !== 'Tab') return;
+    const f = [...modal.querySelectorAll('button:not([disabled]), input')];
+    const first = f[0], last = f[f.length - 1];
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  });
+
   function hunkEl(hk) {
     const lines = hk.lines.map((l) => h('div', { class: l[0] === '+' ? 'a' : l[0] === '-' ? 'd' : '' }, l || ' '));
     if (hk.truncated) lines.push(h('div', { class: 'note' }, '… truncated (raise --max-lines)'));
@@ -198,7 +336,8 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
         h('span', { class: 'badge plain' }, statusText),
         f.binary ? h('span', { class: 'badge plain' }, 'binary') : null,
         f.submodule ? h('span', { class: 'badge plain' }, 'submodule') : null,
-        f.hunks_total ? h('span', { class: 'meta' }, `${f.hunks_already_on_base}/${f.hunks_total} hunks on base`) : null),
+        f.hunks_total ? h('span', { class: 'meta' }, `${f.hunks_already_on_base}/${f.hunks_total} hunks on base`) : null,
+        sbsButton(f.path)),
       hunks.length ? hunks.map(hunkEl)
         : h('div', { class: 'note' }, f.binary ? 'Binary file: compared by blob id only.' : f.submodule ? 'Submodule pointer.' : 'No textual hunks (mode change or empty).'));
   }
@@ -232,6 +371,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
     const open = state.allOpen || state.open.has(key);
     const row = h('div', { class: 'row' + (open ? ' open' : '') });
     row.append(
+      h('div', { class: 'rowhead' },
       h('button', { class: 'head', 'aria-expanded': String(open), onclick: () => { state.open.has(key) ? state.open.delete(key) : state.open.add(key); row.classList.toggle('open'); } },
         h('span', { class: 'badge ' + f.state }, f.state === 'NEW_TO_BASE' ? 'New to base' : 'Already on base'),
         h('span', { class: 'chg' }, f.change),
@@ -239,6 +379,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
         f.binary ? h('span', { class: 'meta' }, 'binary')
           : h('span', { class: 'meta' }, h('span', { class: 'add' }, '+' + (f.insertions ?? 0)), ' ', h('span', { class: 'del' }, '−' + (f.deletions ?? 0))),
         h('span', { class: 'meta wide' }, `${touching.length} commit${touching.length === 1 ? '' : 's'}`)),
+      sbsButton(f.path)),
       h('div', { class: 'body' }, touching.length ? touching.map((c) =>
         h('div', { class: 'links' }, h('span', { class: 'badge ' + c.class }, LABEL[c.class]), ' ',
           h('a', { onclick: () => goCommit(c.sha) }, `${short(c.sha)} ${c.subject}`))) : h('div', { class: 'note' }, 'No head-only commit touches this path.')));
@@ -284,6 +425,8 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
     e.currentTarget.textContent = state.allOpen ? 'Collapse all' : 'Expand all'; render();
   });
   addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !modal.classList.contains('hidden')) { closeSides(); return; }
+    if (!modal.classList.contains('hidden')) return;
     if (e.key === '/' && document.activeElement.tagName !== 'INPUT') { e.preventDefault(); document.getElementById('q').focus(); }
   });
   render();

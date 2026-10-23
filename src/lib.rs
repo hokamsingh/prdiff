@@ -16,3 +16,4 @@ pub mod rawdiff;
 pub mod refs;
 pub mod render;
 pub mod report;
+pub mod sides;

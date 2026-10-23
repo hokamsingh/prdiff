@@ -184,6 +184,9 @@ pub struct Report {
     pub net_files: Vec<NetFile>,
     pub revert_pairs: Vec<RevertPair>,
     pub conflicts: Vec<String>,
+    /// Both versions of each changed file (only populated for `prdiff view`).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub file_sides: Vec<crate::sides::FileSides>,
     /// True when conflicts came from the pre-2.38 `git merge-tree` text parser.
     pub conflicts_best_effort: bool,
     pub totals: Totals,

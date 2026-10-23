@@ -152,7 +152,7 @@ fn split_by_commit<'a>(buf: &'a [u8], shas: impl Iterator<Item = &'a str>) -> Ve
 }
 
 /// `git cat-file --batch` for the given blob ids.
-fn read_blobs(git: &Git, shas: &HashSet<String>) -> Result<HashMap<String, Vec<u8>>> {
+pub(crate) fn read_blobs(git: &Git, shas: &HashSet<String>) -> Result<HashMap<String, Vec<u8>>> {
     let mut out = HashMap::new();
     if shas.is_empty() {
         return Ok(out);

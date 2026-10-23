@@ -41,6 +41,19 @@ markup. `--max-lines` caps the diff shown per file (default 400).
 
 ![prdiff view](docs/view.png)
 
+**Side by side.** Every changed file has a *Side by side* button (inside an expanded commit, and on each row of the
+Files tab). It opens a full-screen viewer: the file as it is **right now on the target branch** on the left, the file
+as the **merging branch** has it on the right, lines aligned, removed lines red and added lines green. Unchanged runs
+are collapsed (click to expand, or untick *Collapse unchanged*), *Prev/Next* jump between changes, `Esc` closes. A
+renamed file is shown under its old name on the left; added and deleted files show an empty side. Binary files get no
+viewer; files over 512 KB per side, or past the report-wide `--max-embed-mb` budget (default 8), get a note with the
+`git diff` command instead. `--no-sides` leaves file contents out entirely.
+
+The left side is the target's *current* tip, so a line that differs may also come from a commit that reached the target
+after the branch was cut; the viewer says so.
+
+![side by side](docs/side-by-side.png)
+
 Useful flags: `--path 'src/**'` (repeatable), `--strict` (PARTIAL counts as NEW), `--shallow` (skip hunk analysis for
 NEW commits), `--patch-id-scope auto|all|base-only`, `--no-cache`, `--exact-conflicts`, `-v` (stage timings), `-C <dir>`.
 
@@ -81,7 +94,7 @@ Reproduce: `python3 scripts/gen_bench_repo.py /tmp/b 20000 1500 && scripts/bench
 ## Develop
 
 ```bash
-cargo test     # 22 tests: fixture repos built with the real git binary, a golden JSON, CLI exit codes, randomized conflict check
+cargo test     # 24 tests: fixture repos built with the real git binary, a golden JSON, CLI exit codes, randomized conflict check
 ```
 Golden file: `UPDATE_GOLDEN=1 cargo test --test cli golden`.
 
