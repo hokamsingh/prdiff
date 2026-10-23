@@ -29,6 +29,8 @@ pub struct Options {
     pub include_empty: bool,
     pub scope: Scope,
     pub use_cache: bool,
+    /// Collect displayable hunks (at most this many lines per file) for every commit, for `prdiff view`.
+    pub detail: Option<usize>,
     /// Always run `git merge-tree` instead of first proving the sides are disjoint.
     pub exact_conflicts: bool,
     pub verbose: bool,
@@ -47,6 +49,7 @@ impl Options {
             include_empty: false,
             scope: Scope::Auto,
             use_cache: true,
+            detail: None,
             exact_conflicts: false,
             verbose: false,
             timeout: Duration::from_secs(300),
@@ -160,14 +163,38 @@ pub fn analyze(o: &Options) -> Result<Report> {
         .iter()
         .enumerate()
         .filter(|(_, r)| {
-            r.class == Classification::Partial
+            (o.detail.is_some() && !r.files.is_empty())
+                || r.class == Classification::Partial
                 || (o.deep && r.class == Classification::New && !r.files.is_empty())
         })
         .map(|(i, _)| i)
         .collect();
     t.stage("hunks", || {
-        hunks::analyze(&git, &kept, &mut reports, &targets, &blobs, !o.strict)
+        hunks::analyze(
+            &git,
+            &kept,
+            &mut reports,
+            &targets,
+            &blobs,
+            !o.strict,
+            o.detail,
+        )
     })?;
+    if o.detail.is_some() {
+        // Already on base by definition, whatever the in-memory hunk matcher says.
+        for r in &mut reports {
+            if matches!(
+                r.class,
+                Classification::Shipped | Classification::PatchEquivalent
+            ) {
+                for f in &mut r.files {
+                    f.hunks_already_on_base = f.hunks_total;
+                    f.hunk_details.iter_mut().for_each(|h| h.on_base = true);
+                }
+                r.hunks_already_on_base = r.hunks_total;
+            }
+        }
+    }
 
     let net_files = t.stage("net", || net::build(&net_raw, &blobs, &filter, &reports));
 

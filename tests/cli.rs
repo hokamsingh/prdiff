@@ -174,3 +174,86 @@ fn golden_json_for_a_squash_merge() {
     let want = std::fs::read_to_string(&golden).expect("run with UPDATE_GOLDEN=1 once");
     assert_eq!(got, want);
 }
+
+#[test]
+fn view_embeds_the_report_and_cannot_be_broken_by_commit_text() {
+    let r = Repo::with_branches(&[("c.txt", "base\n")]);
+    r.checkout("develop");
+    r.commit(
+        "feat: </script><img src=x onerror=alert(1)> & <!-- trick",
+        &[("n.txt", "one\ntwo\n"), ("c.txt", "develop\n")],
+    );
+    r.checkout("staging");
+    r.commit("fix: base side", &[("c.txt", "staging\n")]);
+
+    let out = bin(
+        &r,
+        &[
+            "view", "--base", "staging", "--head", "develop", "--out", "-",
+        ],
+    );
+    assert_eq!(out.status.code(), Some(0));
+    let html = String::from_utf8(out.stdout).unwrap();
+    let start = html
+        .find("<script id=\"data\" type=\"application/json\">")
+        .unwrap()
+        + "<script id=\"data\" type=\"application/json\">".len();
+    let end = start + html[start..].find("</script>").unwrap();
+    let data = &html[start..end];
+    assert!(!data.contains('<'), "no raw `<` inside the embedded JSON");
+    let v: serde_json::Value = serde_json::from_str(data).unwrap();
+    assert_eq!(
+        v["commits"][0]["subject"],
+        "feat: </script><img src=x onerror=alert(1)> & <!-- trick"
+    );
+    // hunks are included for display, and the conflict is reported
+    let files = v["commits"][0]["files"].as_array().unwrap();
+    assert!(
+        files
+            .iter()
+            .all(|f| !f["hunk_details"].as_array().unwrap().is_empty())
+    );
+    assert_eq!(v["conflicts"][0], "c.txt");
+}
+
+#[test]
+fn view_writes_a_file_and_leaves_compare_output_unchanged() {
+    let r = Repo::with_branches(&[("a.txt", "a\n")]);
+    r.checkout("develop");
+    r.commit("feat: x", &[("x.txt", "x\n")]);
+    let before = bin(
+        &r,
+        &[
+            "compare", "--base", "staging", "--head", "develop", "--format", "json",
+        ],
+    );
+    let path = r.path().join("report.html");
+    let out = bin(
+        &r,
+        &[
+            "view",
+            "--base",
+            "staging",
+            "--head",
+            "develop",
+            "--out",
+            path.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(out.status.code(), Some(0));
+    assert!(
+        std::fs::read_to_string(&path)
+            .unwrap()
+            .starts_with("<!doctype html>")
+    );
+    let after = bin(
+        &r,
+        &[
+            "compare", "--base", "staging", "--head", "develop", "--format", "json",
+        ],
+    );
+    assert_eq!(
+        before.stdout, after.stdout,
+        "hunk_details only appear in view mode"
+    );
+}

@@ -104,6 +104,20 @@ enum Cmd {
         #[arg(long, value_enum, default_value_t = Format::Text)]
         format: Format,
     },
+    /// Write a self-contained HTML report: commit timeline by class, files, and colour-coded hunks.
+    View {
+        #[command(flatten)]
+        c: Common,
+        /// Output file, or `-` for stdout.
+        #[arg(long, default_value = "prdiff-report.html")]
+        out: String,
+        /// Open the report in the default browser.
+        #[arg(long)]
+        open: bool,
+        /// Show at most this many diff lines per file.
+        #[arg(long, default_value_t = 400)]
+        max_lines: usize,
+    },
     /// Fail (exit 5) if a PR description lists stale commits or omits new ones.
     Check {
         #[command(flatten)]
@@ -174,6 +188,39 @@ fn run(cli: Cli) -> Result<()> {
                 }
             }
             conflict_gate(c, &paths)
+        }
+        Cmd::View {
+            c,
+            out,
+            open,
+            max_lines,
+        } => {
+            let mut o = options(&cli, c);
+            o.detail = Some(*max_lines);
+            let r = analyze(&o)?;
+            let html = render::view::render(&r);
+            if out == "-" {
+                print!("{html}");
+            } else {
+                std::fs::write(out, html).map_err(|e| bad(format!("cannot write {out}: {e}")))?;
+                let abs = std::fs::canonicalize(out).unwrap_or_else(|_| PathBuf::from(out));
+                eprintln!("prdiff: wrote {}", abs.display());
+                if *open {
+                    let opener = if cfg!(target_os = "macos") {
+                        "open"
+                    } else {
+                        "xdg-open"
+                    };
+                    if std::process::Command::new(opener)
+                        .arg(&abs)
+                        .spawn()
+                        .is_err()
+                    {
+                        eprintln!("prdiff: could not run {opener}; open the file manually");
+                    }
+                }
+            }
+            conflict_gate(c, &r.conflicts)
         }
         Cmd::Check { c, body } => {
             let text = if body == "-" {

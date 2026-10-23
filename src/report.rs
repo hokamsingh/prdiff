@@ -39,6 +39,16 @@ pub enum NetState {
     AlreadyOnBase,
 }
 
+/// One displayed hunk (only populated for `prdiff view`).
+#[derive(Debug, Clone, Serialize)]
+pub struct HunkDetail {
+    pub header: String,
+    pub on_base: bool,
+    /// Lines with their ` `/`+`/`-` prefix.
+    pub lines: Vec<String>,
+    pub truncated: bool,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct FileChange {
     pub path: String,
@@ -50,6 +60,8 @@ pub struct FileChange {
     pub binary: bool,
     pub hunks_total: u32,
     pub hunks_already_on_base: u32,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub hunk_details: Vec<HunkDetail>,
 }
 
 #[derive(Debug, Clone, Serialize)]

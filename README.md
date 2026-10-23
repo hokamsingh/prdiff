@@ -28,7 +28,18 @@ prdiff compare   --base origin/staging --head origin/develop --format json   # s
 prdiff describe  --base origin/staging --head origin/develop --title "release: develop to staging" > body.md
 prdiff conflicts --base origin/staging --head origin/develop --fail-on-conflict
 prdiff check     --base origin/staging --head origin/develop --body body.md  # CI gate: exit 5 if the PR body is stale
+prdiff view      --base origin/staging --head origin/develop --open          # self-contained HTML report
 ```
+
+### `prdiff view`
+
+Writes one offline HTML file (`prdiff-report.html`, or `--out <file>`; `--out -` for stdout): class counts you can click
+to filter, a commit list with an "already on base" bar per commit, a Files tab (new to base vs already on base, with the
+commits behind each file), colour-coded hunks with the ones already on base dimmed, and a conflict banner. Light and
+dark themes; commit text is embedded as JSON and rendered with `textContent`, so a hostile subject line cannot inject
+markup. `--max-lines` caps the diff shown per file (default 400).
+
+![prdiff view](docs/view.png)
 
 Useful flags: `--path 'src/**'` (repeatable), `--strict` (PARTIAL counts as NEW), `--shallow` (skip hunk analysis for
 NEW commits), `--patch-id-scope auto|all|base-only`, `--no-cache`, `--exact-conflicts`, `-v` (stage timings), `-C <dir>`.
@@ -70,7 +81,7 @@ Reproduce: `python3 scripts/gen_bench_repo.py /tmp/b 20000 1500 && scripts/bench
 ## Develop
 
 ```bash
-cargo test     # 20 tests: fixture repos built with the real git binary, a golden JSON, CLI exit codes, randomized conflict check
+cargo test     # 22 tests: fixture repos built with the real git binary, a golden JSON, CLI exit codes, randomized conflict check
 ```
 Golden file: `UPDATE_GOLDEN=1 cargo test --test cli golden`.
 

@@ -7,12 +7,16 @@
 use crate::classify::Blobs;
 use crate::commits::Commit;
 use crate::git::Git;
-use crate::report::{Classification, CommitReport, FileStatus};
+use crate::report::{Classification, CommitReport, FileStatus, HunkDetail};
 use anyhow::Result;
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 
 struct Hunk<'a> {
+    /// The `@@ -a,b +c,d @@ ...` line.
+    header: &'a [u8],
+    /// Every line of the hunk with its ` `/`+`/`-` prefix, for display.
+    raw: Vec<&'a [u8]>,
     /// Context + removed lines.
     before: Vec<&'a [u8]>,
     /// Context + added lines.
@@ -42,6 +46,8 @@ fn parse_diff(diff: &[u8]) -> Vec<FileDiff<'_>> {
         };
         if line.starts_with(b"@@ ") {
             file.hunks.push(Hunk {
+                header: line,
+                raw: Vec::new(),
                 before: Vec::new(),
                 after: Vec::new(),
                 removed: Vec::new(),
@@ -50,6 +56,9 @@ fn parse_diff(diff: &[u8]) -> Vec<FileDiff<'_>> {
         } else if line.starts_with(b"Binary files ") || line.starts_with(b"GIT binary patch") {
             file.binary = true;
         } else if let Some(h) = file.hunks.last_mut() {
+            if matches!(line.first(), Some(b' ' | b'-' | b'+' | b'\\')) {
+                h.raw.push(line);
+            }
             match line.first() {
                 Some(b' ') => {
                     h.before.push(&line[1..]);
@@ -176,6 +185,27 @@ fn read_blobs(git: &Git, shas: &HashSet<String>) -> Result<HashMap<String, Vec<u
     Ok(out)
 }
 
+fn hunk_details(hunks: &[Hunk], on_base: &[bool], max_lines: usize) -> Vec<HunkDetail> {
+    let mut budget = max_lines;
+    hunks
+        .iter()
+        .zip(on_base)
+        .map(|(h, &on_base)| {
+            let take = h.raw.len().min(budget);
+            budget -= take;
+            HunkDetail {
+                header: String::from_utf8_lossy(h.header).into_owned(),
+                on_base,
+                lines: h.raw[..take]
+                    .iter()
+                    .map(|l| String::from_utf8_lossy(l).into_owned())
+                    .collect(),
+                truncated: take < h.raw.len(),
+            }
+        })
+        .collect()
+}
+
 /// Fill in hunk counts for `targets` (indexes into `commits`/`reports`) and promote a commit to SHIPPED
 /// when every hunk of every non-identical file is already on base.
 pub fn analyze(
@@ -185,6 +215,7 @@ pub fn analyze(
     targets: &[usize],
     blobs: &Blobs,
     promote_partial: bool,
+    detail: Option<usize>,
 ) -> Result<()> {
     if targets.is_empty() {
         return Ok(());
@@ -257,20 +288,26 @@ pub fn analyze(
             };
             f.binary = fd.binary;
             f.hunks_total = fd.hunks.len() as u32;
-            if f.status == FileStatus::Identical {
-                // The whole file matches base, so every hunk is on base.
-                f.hunks_already_on_base = f.hunks_total;
-                continue;
-            }
             let base_lines = match blobs.get(&e.path) {
                 Some(Some(sha)) if f.status == FileStatus::Different && !e.is_delete() => {
                     lines.get(sha)
                 }
                 _ => None,
             };
-            if let Some(base) = base_lines {
-                f.hunks_already_on_base =
-                    fd.hunks.iter().filter(|h| hunk_on_base(h, base)).count() as u32;
+            let on_base: Vec<bool> = if f.status == FileStatus::Identical {
+                // The whole file matches base, so every hunk is on base.
+                vec![true; fd.hunks.len()]
+            } else if let Some(base) = base_lines {
+                fd.hunks.iter().map(|h| hunk_on_base(h, base)).collect()
+            } else {
+                vec![false; fd.hunks.len()]
+            };
+            f.hunks_already_on_base = on_base.iter().filter(|b| **b).count() as u32;
+            if let Some(max_lines) = detail {
+                f.hunk_details = hunk_details(&fd.hunks, &on_base, max_lines);
+            }
+            if f.status == FileStatus::Identical {
+                continue;
             }
             if fd.binary
                 || f.submodule
@@ -285,6 +322,10 @@ pub fn analyze(
         let r = &mut reports[i];
         r.hunks_total = r.files.iter().map(|f| f.hunks_total).sum();
         r.hunks_already_on_base = r.files.iter().map(|f| f.hunks_already_on_base).sum();
+        if !matches!(r.class, Classification::New | Classification::Partial) {
+            // SHIPPED / PATCH_EQUIVALENT were decided earlier; this pass only fills in hunk detail.
+            continue;
+        }
         if explained && (any_hunk_file || r.files.iter().all(|f| f.status == FileStatus::Identical))
         {
             r.class = Classification::Shipped;

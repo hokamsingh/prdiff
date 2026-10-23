@@ -1,0 +1,293 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>prdiff report</title>
+<style>
+:root {
+  --bg: #ffffff; --surface: #f6f8fa; --border: #d0d7de; --text: #1f2328; --muted: #656d76;
+  --new: #0969da; --new-bg: #ddf4ff; --partial: #9a6700; --partial-bg: #fff8c5;
+  --shipped: #1a7f37; --shipped-bg: #dafbe1; --pe: #8250df; --pe-bg: #fbefff;
+  --add-bg: #dafbe1; --del-bg: #ffebe9; --danger: #cf222e; --danger-bg: #ffebe9;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0d1117; --surface: #161b22; --border: #30363d; --text: #e6edf3; --muted: #8d96a0;
+    --new: #58a6ff; --new-bg: #0c2d6b; --partial: #e3b341; --partial-bg: #3b2e00;
+    --shipped: #3fb950; --shipped-bg: #0f3d1c; --pe: #bc8cff; --pe-bg: #2d1b4e;
+    --add-bg: #0f3d1c; --del-bg: #4c1417; --danger: #ff7b72; --danger-bg: #4c1417;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0d1117; --surface: #161b22; --border: #30363d; --text: #e6edf3; --muted: #8d96a0;
+  --new: #58a6ff; --new-bg: #0c2d6b; --partial: #e3b341; --partial-bg: #3b2e00;
+  --shipped: #3fb950; --shipped-bg: #0f3d1c; --pe: #bc8cff; --pe-bg: #2d1b4e;
+  --add-bg: #0f3d1c; --del-bg: #4c1417; --danger: #ff7b72; --danger-bg: #4c1417;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+main { max-width: 1100px; margin: 0 auto; padding: 20px 16px 64px; }
+h1 { font-size: 18px; margin: 0 0 4px; display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; }
+code, .mono { font-family: var(--mono); font-size: 12.5px; }
+.sub { color: var(--muted); font-size: 12.5px; margin-bottom: 16px; }
+.refs .arrow { color: var(--muted); }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+.chip { border: 1px solid var(--border); background: var(--surface); color: var(--text); border-radius: 8px; padding: 8px 12px; cursor: pointer; font: inherit; text-align: left; min-width: 118px; }
+.chip b { display: block; font-size: 20px; line-height: 1.1; }
+.chip span { font-size: 11.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.chip[aria-pressed="true"] { outline: 2px solid currentColor; }
+.chip.NEW { color: var(--new); } .chip.PARTIAL { color: var(--partial); }
+.chip.SHIPPED { color: var(--shipped); } .chip.PATCH_EQUIVALENT { color: var(--pe); }
+.chip b, .chip span { color: inherit; }
+.chip span { color: var(--muted); }
+.facts { display: flex; flex-wrap: wrap; gap: 6px 20px; color: var(--muted); margin-bottom: 12px; }
+.facts b { color: var(--text); }
+.add { color: var(--shipped); } .del { color: var(--danger); }
+.banner { border: 1px solid var(--danger); background: var(--danger-bg); border-radius: 8px; padding: 10px 12px; margin-bottom: 12px; }
+.banner ul { margin: 6px 0 0; padding-left: 18px; }
+.ok { border-color: var(--border); background: var(--surface); }
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin: 16px 0 12px; }
+.tab { background: none; border: 0; padding: 8px 14px; color: var(--muted); font: inherit; cursor: pointer; border-bottom: 2px solid transparent; }
+.tab[aria-selected="true"] { color: var(--text); border-bottom-color: var(--new); font-weight: 600; }
+.tools { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 10px; }
+.tools input[type=search], .tools select { background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; font: inherit; }
+.tools input[type=search] { flex: 1 1 220px; min-width: 0; }
+.tools label { color: var(--muted); display: flex; gap: 6px; align-items: center; }
+.row { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 6px; background: var(--bg); }
+.head { display: flex; gap: 10px; align-items: center; padding: 8px 10px; cursor: pointer; width: 100%; background: none; border: 0; color: inherit; font: inherit; text-align: left; }
+.head:hover { background: var(--surface); }
+.badge { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px; white-space: nowrap; letter-spacing: .02em; }
+.badge.NEW { background: var(--new-bg); color: var(--new); }
+.badge.PARTIAL { background: var(--partial-bg); color: var(--partial); }
+.badge.SHIPPED { background: var(--shipped-bg); color: var(--shipped); }
+.badge.PATCH_EQUIVALENT { background: var(--pe-bg); color: var(--pe); }
+.badge.NEW_TO_BASE { background: var(--new-bg); color: var(--new); }
+.badge.ALREADY_ON_BASE { background: var(--shipped-bg); color: var(--shipped); }
+.badge.plain { background: var(--surface); color: var(--muted); border: 1px solid var(--border); font-weight: 500; }
+.subject { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.meta { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.bar { width: 70px; height: 6px; border-radius: 3px; background: var(--border); overflow: hidden; display: inline-block; vertical-align: middle; }
+.bar i { display: block; height: 100%; background: var(--shipped); }
+.body { border-top: 1px solid var(--border); padding: 8px 10px 10px; display: none; background: var(--surface); }
+.row.open > .body { display: block; }
+.file { margin: 8px 0 12px; }
+.file > .fh { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 4px; }
+.chg { font: 600 11px var(--mono); width: 18px; text-align: center; border-radius: 4px; padding: 1px 0; background: var(--border); color: var(--text); }
+.hunk { border: 1px solid var(--border); border-radius: 6px; margin: 4px 0; overflow: hidden; background: var(--bg); }
+.hunk.onbase { opacity: .62; }
+.hunk > .hh { display: flex; justify-content: space-between; gap: 8px; padding: 3px 8px; background: var(--surface); color: var(--muted); border-bottom: 1px solid var(--border); font: 12px var(--mono); }
+.hunk pre { margin: 0; overflow-x: auto; font: 12px/1.45 var(--mono); }
+.hunk pre div { padding: 0 8px; white-space: pre; min-height: 1.45em; }
+.hunk pre .a { background: var(--add-bg); } .hunk pre .d { background: var(--del-bg); }
+.note { color: var(--muted); font-style: italic; }
+.empty { color: var(--muted); padding: 24px; text-align: center; border: 1px dashed var(--border); border-radius: 8px; }
+.links a { color: var(--new); cursor: pointer; text-decoration: underline; }
+.hidden { display: none !important; }
+button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--new); outline-offset: 1px; }
+@media (max-width: 640px) { .meta.wide { display: none; } .bar { width: 44px; } }
+</style>
+</head>
+<body>
+<main>
+  <h1><span>prdiff</span> <span class="refs mono" id="refs"></span></h1>
+  <div class="sub" id="sub"></div>
+  <div class="chips" id="chips" role="group" aria-label="Filter commits by class"></div>
+  <div class="facts" id="facts"></div>
+  <div id="conflicts"></div>
+  <div class="tabs" role="tablist">
+    <button class="tab" role="tab" id="tab-commits" aria-selected="true">Commits</button>
+    <button class="tab" role="tab" id="tab-files" aria-selected="false">Files</button>
+  </div>
+  <div class="tools">
+    <input type="search" id="q" placeholder="Filter by subject, sha or path  (press /)" aria-label="Filter">
+    <select id="kind" aria-label="Commit kind">
+      <option value="">All kinds</option><option>FEAT</option><option>FIX</option>
+      <option>REFACTOR</option><option>CHORE</option><option>OTHER</option>
+    </select>
+    <label><input type="checkbox" id="hide"> Hide already on base</label>
+    <button class="tab" id="expand" style="padding:6px 10px;border:1px solid var(--border);border-radius:6px">Expand all</button>
+  </div>
+  <div id="list"></div>
+</main>
+<script id="data" type="application/json">__PRDIFF_DATA__</script>
+<script>
+(() => {
+  const R = JSON.parse(document.getElementById('data').textContent);
+  const LABEL = { NEW: 'New', PARTIAL: 'Partial', SHIPPED: 'Shipped', PATCH_EQUIVALENT: 'Patch-equivalent' };
+  const HINT = {
+    NEW: 'still has something to ship', PARTIAL: 'part of it is already on base',
+    SHIPPED: 'content already on base', PATCH_EQUIVALENT: 'same patch is on base',
+  };
+  const state = { tab: 'commits', classes: new Set(), q: '', kind: '', hide: false, open: new Set(), allOpen: false };
+
+  const h = (tag, attrs = {}, ...kids) => {
+    const el = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs)) {
+      if (k === 'class') el.className = v;
+      else if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
+      else if (v !== false && v != null) el.setAttribute(k, v);
+    }
+    for (const kid of kids.flat()) if (kid != null) el.append(kid.nodeType ? kid : document.createTextNode(kid));
+    return el;
+  };
+  const short = (s) => s.slice(0, 7);
+  const t = R.totals;
+
+  // header
+  document.getElementById('refs').append(
+    h('b', {}, R.base.name), ' ', h('span', { class: 'arrow' }, '←'), ' ', h('b', {}, R.head.name));
+  document.getElementById('sub').textContent =
+    `base ${short(R.base.sha)} · head ${short(R.head.sha)} · merge-base ${short(R.merge_base)} · ${t.commits} head-only commits`;
+
+  const chips = document.getElementById('chips');
+  for (const c of ['NEW', 'PARTIAL', 'SHIPPED', 'PATCH_EQUIVALENT']) {
+    chips.append(h('button', {
+      class: 'chip ' + c, 'aria-pressed': 'false', title: HINT[c],
+      onclick: (e) => {
+        state.classes.has(c) ? state.classes.delete(c) : state.classes.add(c);
+        e.currentTarget.setAttribute('aria-pressed', state.classes.has(c));
+        render();
+      },
+    }, h('b', {}, String(t.by_class[c] ?? 0)), h('span', {}, LABEL[c])));
+  }
+  const facts = document.getElementById('facts');
+  facts.append(
+    h('span', {}, h('b', {}, String(t.files_new_to_base)), ' files new to base ',
+      h('span', { class: 'add' }, '+' + t.insertions), ' ', h('span', { class: 'del' }, '−' + t.deletions)),
+    h('span', {}, h('b', {}, String(t.files_already_on_base)), ' files already on base'),
+    h('span', {}, h('b', {}, String(t.listed)), ' commits to list in the PR'));
+  if (R.revert_pairs.length) facts.append(h('span', {}, h('b', {}, String(R.revert_pairs.length)), ' revert pair(s)'));
+
+  const cf = document.getElementById('conflicts');
+  if (R.conflicts.length) {
+    cf.append(h('div', { class: 'banner', role: 'alert' },
+      h('b', {}, `${R.conflicts.length} conflicted file(s)` + (R.conflicts_best_effort ? ' (best effort, old git)' : '')),
+      h('ul', {}, R.conflicts.map((p) => h('li', {}, h('code', {}, p))))));
+  } else {
+    cf.append(h('div', { class: 'banner ok' }, 'No merge conflicts between base and head.'));
+  }
+
+  // commits
+  const filesOf = new Map(); // path -> [commit]
+  for (const c of R.commits) for (const f of c.files) {
+    for (const p of [f.path, f.old_path].filter(Boolean)) {
+      if (!filesOf.has(p)) filesOf.set(p, []);
+      filesOf.get(p).push(c);
+    }
+  }
+  const revertedBy = new Map(R.revert_pairs.map((p) => [p.reverted, p.revert]));
+  const commitBySha = new Map(R.commits.map((c) => [c.sha, c]));
+
+  function hunkEl(hk) {
+    const lines = hk.lines.map((l) => h('div', { class: l[0] === '+' ? 'a' : l[0] === '-' ? 'd' : '' }, l || ' '));
+    if (hk.truncated) lines.push(h('div', { class: 'note' }, '… truncated (raise --max-lines)'));
+    return h('div', { class: 'hunk' + (hk.on_base ? ' onbase' : '') },
+      h('div', { class: 'hh' }, h('span', {}, hk.header.replace(/^(@@ [^@]+@@).*/, '$1')),
+        h('span', {}, hk.on_base ? 'already on base' : 'new to base')),
+      h('pre', {}, lines));
+  }
+  function fileEl(f) {
+    const statusText = { IDENTICAL: 'identical on base', DIFFERENT: 'differs from base', ABSENT: 'not on base' }[f.status];
+    const hunks = f.hunk_details || [];
+    return h('div', { class: 'file' },
+      h('div', { class: 'fh' },
+        h('span', { class: 'chg', title: 'A added · M modified · D deleted · R renamed' }, f.change),
+        h('code', {}, f.old_path ? `${f.old_path} → ${f.path}` : f.path),
+        h('span', { class: 'badge plain' }, statusText),
+        f.binary ? h('span', { class: 'badge plain' }, 'binary') : null,
+        f.submodule ? h('span', { class: 'badge plain' }, 'submodule') : null,
+        f.hunks_total ? h('span', { class: 'meta' }, `${f.hunks_already_on_base}/${f.hunks_total} hunks on base`) : null),
+      hunks.length ? hunks.map(hunkEl)
+        : h('div', { class: 'note' }, f.binary ? 'Binary file: compared by blob id only.' : f.submodule ? 'Submodule pointer.' : 'No textual hunks (mode change or empty).'));
+  }
+  function commitEl(c) {
+    const pct = c.hunks_total ? Math.round(100 * c.hunks_already_on_base / c.hunks_total) : (c.class === 'NEW' ? 0 : 100);
+    const open = state.allOpen || state.open.has(c.sha);
+    const row = h('div', { class: 'row' + (open ? ' open' : ''), id: 'c-' + c.sha });
+    const extra = [];
+    if (c.reverts && commitBySha.has(c.reverts)) extra.push(h('span', { class: 'badge plain' }, 'reverts ' + short(c.reverts)));
+    if (revertedBy.has(c.sha)) extra.push(h('span', { class: 'badge plain' }, 'reverted by ' + short(revertedBy.get(c.sha))));
+    if (c.matched_base_commit) extra.push(h('span', { class: 'badge plain', title: 'carried on base as this commit' }, '≡ ' + short(c.matched_base_commit)));
+    row.append(
+      h('button', {
+        class: 'head', 'aria-expanded': String(open),
+        onclick: () => { state.open.has(c.sha) ? state.open.delete(c.sha) : state.open.add(c.sha); row.classList.toggle('open'); },
+      },
+        h('span', { class: 'badge ' + c.class }, LABEL[c.class]),
+        h('code', { class: 'mono' }, short(c.sha)),
+        h('span', { class: 'subject', title: c.subject }, c.subject),
+        extra,
+        h('span', { class: 'meta wide' }, c.kind.toLowerCase()),
+        h('span', { class: 'meta' }, `${c.files.length} file${c.files.length === 1 ? '' : 's'}`),
+        h('span', { class: 'bar', title: `${pct}% of hunks already on base` }, h('i', { style: `width:${pct}%` }))),
+      h('div', { class: 'body' }, c.files.length ? c.files.map(fileEl) : h('div', { class: 'note' }, 'No file changes.')));
+    return row;
+  }
+  function netEl(f) {
+    const touching = [...new Map((filesOf.get(f.path) || []).map((c) => [c.sha, c])).values()];
+    const total = (f.insertions || 0) + (f.deletions || 0);
+    const key = 'f-' + f.path;
+    const open = state.allOpen || state.open.has(key);
+    const row = h('div', { class: 'row' + (open ? ' open' : '') });
+    row.append(
+      h('button', { class: 'head', 'aria-expanded': String(open), onclick: () => { state.open.has(key) ? state.open.delete(key) : state.open.add(key); row.classList.toggle('open'); } },
+        h('span', { class: 'badge ' + f.state }, f.state === 'NEW_TO_BASE' ? 'New to base' : 'Already on base'),
+        h('span', { class: 'chg' }, f.change),
+        h('code', { class: 'subject', title: f.path }, f.old_path ? `${f.old_path} → ${f.path}` : f.path),
+        f.binary ? h('span', { class: 'meta' }, 'binary')
+          : h('span', { class: 'meta' }, h('span', { class: 'add' }, '+' + (f.insertions ?? 0)), ' ', h('span', { class: 'del' }, '−' + (f.deletions ?? 0))),
+        h('span', { class: 'meta wide' }, `${touching.length} commit${touching.length === 1 ? '' : 's'}`)),
+      h('div', { class: 'body' }, touching.length ? touching.map((c) =>
+        h('div', { class: 'links' }, h('span', { class: 'badge ' + c.class }, LABEL[c.class]), ' ',
+          h('a', { onclick: () => goCommit(c.sha) }, `${short(c.sha)} ${c.subject}`))) : h('div', { class: 'note' }, 'No head-only commit touches this path.')));
+    return row;
+  }
+  function goCommit(sha) {
+    state.tab = 'commits'; state.open.add(sha); state.q = ''; state.classes.clear(); state.hide = false;
+    document.getElementById('q').value = ''; document.getElementById('hide').checked = false;
+    document.querySelectorAll('.chip').forEach((c) => c.setAttribute('aria-pressed', 'false'));
+    render();
+    document.getElementById('c-' + sha)?.scrollIntoView({ block: 'center' });
+  }
+
+  function render() {
+    for (const k of ['commits', 'files']) document.getElementById('tab-' + k).setAttribute('aria-selected', String(state.tab === k));
+    document.getElementById('kind').classList.toggle('hidden', state.tab !== 'commits');
+    const q = state.q.toLowerCase();
+    const list = document.getElementById('list');
+    list.replaceChildren();
+    let shown = [];
+    if (state.tab === 'commits') {
+      shown = R.commits.filter((c) =>
+        (!state.classes.size || state.classes.has(c.class)) &&
+        (!state.kind || c.kind === state.kind) &&
+        (!state.hide || c.class === 'NEW' || c.class === 'PARTIAL') &&
+        (!q || c.subject.toLowerCase().includes(q) || c.sha.startsWith(q) || c.files.some((f) => f.path.toLowerCase().includes(q))));
+      list.append(...shown.map(commitEl));
+    } else {
+      shown = R.net_files.filter((f) =>
+        (!state.hide || f.state === 'NEW_TO_BASE') && (!q || f.path.toLowerCase().includes(q)));
+      list.append(...shown.map(netEl));
+    }
+    if (!shown.length) list.append(h('div', { class: 'empty' }, 'Nothing matches the current filters.'));
+  }
+
+  document.getElementById('tab-commits').onclick = () => { state.tab = 'commits'; render(); };
+  document.getElementById('tab-files').onclick = () => { state.tab = 'files'; render(); };
+  document.getElementById('q').addEventListener('input', (e) => { state.q = e.target.value; render(); });
+  document.getElementById('kind').addEventListener('change', (e) => { state.kind = e.target.value; render(); });
+  document.getElementById('hide').addEventListener('change', (e) => { state.hide = e.target.checked; render(); });
+  document.getElementById('expand').addEventListener('click', (e) => {
+    state.allOpen = !state.allOpen; state.open.clear();
+    e.currentTarget.textContent = state.allOpen ? 'Collapse all' : 'Expand all'; render();
+  });
+  addEventListener('keydown', (e) => {
+    if (e.key === '/' && document.activeElement.tagName !== 'INPUT') { e.preventDefault(); document.getElementById('q').focus(); }
+  });
+  render();
+})();
+</script>
+</body>
+</html>

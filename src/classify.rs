@@ -81,6 +81,7 @@ pub fn file_change(e: &Entry, blobs: &Blobs) -> FileChange {
         binary: false,
         hunks_total: 0,
         hunks_already_on_base: 0,
+        hunk_details: Vec::new(),
     }
 }
 
