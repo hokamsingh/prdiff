@@ -1,0 +1,144 @@
+{
+  "schema_version": 1,
+  "base": {
+    "name": "staging",
+    "sha": "ba1c4631773b3cf7dfbb12fd23030d0fb9d371fb"
+  },
+  "head": {
+    "name": "develop",
+    "sha": "771c37558bc964a7c47976b2603b0d6aa560649e"
+  },
+  "merge_base": "dff720095907141b5e2c1c842913941a7781c7f4",
+  "commits": [
+    {
+      "sha": "f39926c7f2d4e63c040e675bcd0ad07a50325810",
+      "short": "f39926c",
+      "subject": "feat: add a",
+      "author": "Tester",
+      "kind": "FEAT",
+      "class": "SHIPPED",
+      "matched_base_commit": null,
+      "reverts": null,
+      "files": [
+        {
+          "path": "a.txt",
+          "old_path": null,
+          "change": "A",
+          "status": "IDENTICAL",
+          "submodule": false,
+          "binary": false,
+          "hunks_total": 0,
+          "hunks_already_on_base": 0
+        }
+      ],
+      "hunks_total": 0,
+      "hunks_already_on_base": 0
+    },
+    {
+      "sha": "486c6269fa78f66142bf6014e633284f0330a94c",
+      "short": "486c626",
+      "subject": "feat: add b",
+      "author": "Tester",
+      "kind": "FEAT",
+      "class": "SHIPPED",
+      "matched_base_commit": null,
+      "reverts": null,
+      "files": [
+        {
+          "path": "b.txt",
+          "old_path": null,
+          "change": "A",
+          "status": "IDENTICAL",
+          "submodule": false,
+          "binary": false,
+          "hunks_total": 0,
+          "hunks_already_on_base": 0
+        }
+      ],
+      "hunks_total": 0,
+      "hunks_already_on_base": 0
+    },
+    {
+      "sha": "771c37558bc964a7c47976b2603b0d6aa560649e",
+      "short": "771c375",
+      "subject": "fix: only on develop",
+      "author": "Tester",
+      "kind": "FIX",
+      "class": "NEW",
+      "matched_base_commit": null,
+      "reverts": null,
+      "files": [
+        {
+          "path": "c.txt",
+          "old_path": null,
+          "change": "A",
+          "status": "ABSENT",
+          "submodule": false,
+          "binary": false,
+          "hunks_total": 1,
+          "hunks_already_on_base": 0
+        }
+      ],
+      "hunks_total": 1,
+      "hunks_already_on_base": 0
+    }
+  ],
+  "net_files": [
+    {
+      "path": "a.txt",
+      "old_path": null,
+      "change": "A",
+      "state": "ALREADY_ON_BASE",
+      "insertions": 1,
+      "deletions": 0,
+      "binary": false,
+      "submodule": false
+    },
+    {
+      "path": "b.txt",
+      "old_path": null,
+      "change": "A",
+      "state": "ALREADY_ON_BASE",
+      "insertions": 1,
+      "deletions": 0,
+      "binary": false,
+      "submodule": false
+    },
+    {
+      "path": "c.txt",
+      "old_path": null,
+      "change": "A",
+      "state": "NEW_TO_BASE",
+      "insertions": 1,
+      "deletions": 0,
+      "binary": false,
+      "submodule": false
+    }
+  ],
+  "revert_pairs": [],
+  "conflicts": [],
+  "conflicts_best_effort": false,
+  "totals": {
+    "commits": 3,
+    "by_class": {
+      "NEW": 1,
+      "PARTIAL": 0,
+      "SHIPPED": 2,
+      "PATCH_EQUIVALENT": 0
+    },
+    "listed": 1,
+    "listed_by_kind": {
+      "FEAT": 0,
+      "FIX": 1,
+      "REFACTOR": 0,
+      "CHORE": 0,
+      "OTHER": 0
+    },
+    "empty_skipped": 0,
+    "files_new_to_base": 1,
+    "files_already_on_base": 2,
+    "insertions": 1,
+    "deletions": 0,
+    "conflicted_files": 0
+  }
+}
