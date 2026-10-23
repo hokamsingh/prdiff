@@ -104,13 +104,18 @@ fn ignore_whitespace_makes_a_reformat_a_non_event() {
     ));
     assert_eq!(ws["totals"]["by_class"]["SHIPPED"], 1, "{ws:#}");
     assert_eq!(ws["totals"]["by_class"]["NEW"], 1);
+    // newer git leaves a whitespace-only file out of `diff --raw -w` altogether, older git lists it with
+    // 0/0 counts; either way it must not count as something left to ship
     let a = ws["net_files"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|f| f["path"] == "a.js")
-        .unwrap();
-    assert_eq!(a["state"], "ALREADY_ON_BASE");
+        .find(|f| f["path"] == "a.js");
+    assert!(a.is_none_or(|f| f["state"] == "ALREADY_ON_BASE"), "{a:?}");
+    assert_eq!(
+        ws["totals"]["files_new_to_base"], 1,
+        "only b.js is left to ship"
+    );
 }
 
 #[test]
