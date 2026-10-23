@@ -4,6 +4,7 @@ use prdiff::analyze::{Options, analyze, conflicts_only};
 use prdiff::config::{self, Config};
 use prdiff::error::{Error, bad};
 use prdiff::git::Git;
+use prdiff::github;
 use prdiff::patchid::Scope;
 use prdiff::render;
 use prdiff::rewrite;
@@ -52,6 +53,10 @@ struct Common {
     /// Leave files matching this glob out of file lists and stats (repeatable), e.g. lockfiles.
     #[arg(long = "exclude")]
     excludes: Vec<String>,
+    /// Compare a GitHub pull request (needs the `gh` CLI): fetches its base and head and uses them
+    /// instead of --base/--head.
+    #[arg(long)]
+    pr: Option<u32>,
     /// Do not read CODEOWNERS.
     #[arg(long)]
     no_owners: bool,
@@ -90,6 +95,14 @@ enum ScopeArg {
     All,
     /// Only commits on base that are not on head.
     BaseOnly,
+}
+
+#[derive(ValueEnum, Clone, Copy, PartialEq)]
+enum PublishMode {
+    /// Between `<!-- prdiff:start -->` and `<!-- prdiff:end -->` in the PR description.
+    Body,
+    /// One comment, found by its marker and edited on later runs.
+    Comment,
 }
 
 #[derive(ValueEnum, Clone, Copy, PartialEq)]
@@ -206,13 +219,26 @@ enum Cmd {
         #[arg(long, value_enum, default_value_t = Format::Text)]
         format: Format,
     },
+    /// Post the generated description to a GitHub PR (needs `gh`): into the PR body between markers, or
+    /// as one sticky comment that is updated in place.
+    Publish {
+        #[command(flatten)]
+        c: Common,
+        #[arg(long, value_enum, default_value_t = PublishMode::Body)]
+        mode: PublishMode,
+        #[arg(long)]
+        title: Option<String>,
+        /// Print what would be posted and change nothing.
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Fail (exit 5) if a PR description lists stale commits or omits new ones.
     Check {
         #[command(flatten)]
         c: Common,
-        /// File holding the PR body, or `-` for stdin.
+        /// File holding the PR body, or `-` for stdin. With --pr this defaults to the PR's own body.
         #[arg(long)]
-        body: String,
+        body: Option<String>,
     },
 }
 
@@ -224,7 +250,20 @@ fn options(cli: &Cli, c: &Common) -> Result<(Options, Config)> {
 fn options_with(cli: &Cli, c: &Common, infer_base: bool) -> Result<(Options, Config)> {
     let cfg = config::load(&cli.repo, cli.config.as_deref())?;
     let git = Git::new(&cli.repo, Duration::from_secs(cli.timeout));
-    let head = match c.head.clone().or_else(|| cfg.head.clone()) {
+    let pr = match c.pr {
+        Some(n) => {
+            let info = github::pr_info(&cli.repo, n)?;
+            let (b, h) = github::fetch_pr(&git, n, &info)?;
+            Some((b, h, info.head_ref))
+        }
+        None => None,
+    };
+    let head = match pr
+        .as_ref()
+        .map(|p| p.1.clone())
+        .or_else(|| c.head.clone())
+        .or_else(|| cfg.head.clone())
+    {
         Some(h) => h,
         None => {
             let h = config::infer_head(&git)?;
@@ -232,7 +271,12 @@ fn options_with(cli: &Cli, c: &Common, infer_base: bool) -> Result<(Options, Con
             h
         }
     };
-    let base = match c.base.clone().or_else(|| cfg.base.clone()) {
+    let base = match pr
+        .as_ref()
+        .map(|p| p.0.clone())
+        .or_else(|| c.base.clone())
+        .or_else(|| cfg.base.clone())
+    {
         Some(b) => b,
         None if !infer_base => String::new(),
         None => {
@@ -242,6 +286,7 @@ fn options_with(cli: &Cli, c: &Common, infer_base: bool) -> Result<(Options, Con
         }
     };
     let mut o = Options::new(&cli.repo, &base, &head);
+    o.head_label = pr.map(|p| p.2);
     o.paths = if c.paths.is_empty() {
         cfg.paths.clone()
     } else {
@@ -529,14 +574,44 @@ fn run(cli: Cli) -> Result<()> {
             }
             Ok(())
         }
+        Cmd::Publish {
+            c,
+            mode,
+            title,
+            dry_run,
+        } => {
+            let Some(number) = c.pr else {
+                return Err(bad("publish needs --pr <number>"));
+            };
+            let r = analyze(&options(&cli, c)?.0)?;
+            let md = render::markdown::render(&r, title.as_deref());
+            let current = github::pr_info(&cli.repo, number)?.body;
+            if *dry_run {
+                match mode {
+                    PublishMode::Body => print!("{}", github::merge_body(&current, &md)),
+                    PublishMode::Comment => print!("{}", github::comment_body(&md)),
+                }
+                println!();
+                return Ok(());
+            }
+            let done = match mode {
+                PublishMode::Body => github::publish_body(&cli.repo, number, &current, &md)?,
+                PublishMode::Comment => github::publish_comment(&cli.repo, number, &md)?,
+            };
+            eprintln!("prdiff: PR #{number}: {done:?}");
+            conflict_gate(c, &r.conflicts)
+        }
         Cmd::Check { c, body } => {
-            let text = if body == "-" {
-                let mut s = String::new();
-                std::io::stdin().read_to_string(&mut s)?;
-                s
-            } else {
-                std::fs::read_to_string(body)
-                    .map_err(|e| bad(format!("cannot read {body}: {e}")))?
+            let text = match (body.as_deref(), c.pr) {
+                (Some("-"), _) => {
+                    let mut s = String::new();
+                    std::io::stdin().read_to_string(&mut s)?;
+                    s
+                }
+                (Some(path), _) => std::fs::read_to_string(path)
+                    .map_err(|e| bad(format!("cannot read {path}: {e}")))?,
+                (None, Some(n)) => github::pr_info(&cli.repo, n)?.body,
+                (None, None) => return Err(bad("check needs --body <file|-> or --pr <number>")),
             };
             let r = analyze(&options(&cli, c)?.0)?;
             let m = prdiff::check::check(&r, &text);

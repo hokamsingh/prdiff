@@ -24,6 +24,8 @@ pub struct Options {
     pub repo: PathBuf,
     pub base: String,
     pub head: String,
+    /// Shown instead of the head ref's name (e.g. the PR's branch when comparing `refs/prdiff/pr/N`).
+    pub head_label: Option<String>,
     pub paths: Vec<String>,
     /// Left out of file lists and stats (not of commit classification).
     pub exclude: Vec<String>,
@@ -55,6 +57,7 @@ impl Options {
             repo: repo.into(),
             base: base.into(),
             head: head.into(),
+            head_label: None,
             paths: vec![],
             exclude: vec![],
             ignore_whitespace: false,
@@ -114,8 +117,11 @@ pub fn analyze(o: &Options) -> Result<Report> {
     let (base, head, merge_base) = t.stage("refs", || -> Result<_> {
         refs::ensure_not_shallow(&git)?;
         let base = refs::resolve(&git, &o.base)?;
-        let head = refs::resolve(&git, &o.head)?;
+        let mut head = refs::resolve(&git, &o.head)?;
         let mb = refs::merge_base(&git, &base, &head)?;
+        if let Some(label) = &o.head_label {
+            head.name = label.clone();
+        }
         Ok((base, head, mb))
     })?;
 

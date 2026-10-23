@@ -10,6 +10,7 @@ pub mod config;
 pub mod conflicts;
 pub mod error;
 pub mod git;
+pub mod github;
 pub mod glob;
 pub mod hunks;
 pub mod net;
