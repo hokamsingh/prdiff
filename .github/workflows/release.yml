@@ -2,6 +2,12 @@ name: release
 on:
   push:
     tags: ["v*"]
+  # run from the Actions tab (or `gh workflow run release.yml -f version=v0.2.0`) to create the tag and release
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Tag to create, e.g. v0.2.0 (must match the version in Cargo.toml)"
+        required: true
 permissions:
   contents: write
 jobs:
@@ -40,6 +46,7 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           path: dist
@@ -47,4 +54,10 @@ jobs:
       - name: publish
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --generate-notes
+          TAG: ${{ inputs.version || github.ref_name }}
+        run: |
+          set -euo pipefail
+          want="${TAG#v}"
+          have=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          [ "$want" = "$have" ] || { echo "::error::tag $TAG does not match Cargo.toml version $have"; exit 1; }
+          gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --generate-notes
