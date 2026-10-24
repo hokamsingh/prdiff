@@ -23,3 +23,6 @@ toml = "1.1.8"
 [profile.release]
 strip = true
 lto = "thin"
+
+[target."cfg(unix)".dependencies]
+libc = "0.2.191"

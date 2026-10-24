@@ -690,6 +690,13 @@ fn run(cli: Cli) -> Result<()> {
 }
 
 fn main() -> ExitCode {
+    // Like other command line tools, stop quietly when the reader goes away (`prdiff ... | head`),
+    // instead of panicking with "failed printing to stdout: Broken pipe".
+    #[cfg(unix)]
+    // SAFETY: restoring the default disposition of a signal before any thread is started.
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
     let cli = Cli::parse();
     match run(cli).context("prdiff") {
         Ok(()) => ExitCode::SUCCESS,

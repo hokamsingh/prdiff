@@ -438,3 +438,25 @@ fn a_file_added_by_the_pr_is_all_pr_change() {
     assert!(covers(&s["pr_changed"], 0) && covers(&s["pr_changed"], 1));
     assert!(s["target_changed"].as_array().unwrap().is_empty());
 }
+
+#[cfg(unix)]
+#[test]
+fn a_closed_pipe_ends_quietly_instead_of_panicking() {
+    let r = setup();
+    // `head -1` closes the pipe after the first line while prdiff is still writing
+    let out = Command::new("sh")
+        .arg("-c")
+        .arg(format!(
+            "'{}' -C '{}' compare --base staging --head develop --format json | head -1",
+            env!("CARGO_BIN_EXE_prdiff"),
+            r.path().display()
+        ))
+        .output()
+        .unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !err.contains("panicked") && !err.contains("Broken pipe"),
+        "{err}"
+    );
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "{");
+}
