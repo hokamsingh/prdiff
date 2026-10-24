@@ -25,9 +25,9 @@ esac
 asset="prdiff-$arch-$os.tar.gz"
 
 if [ "$VERSION" = "latest" ]; then
-  url="$BASE_URL/latest/download/$asset"
+  url_dir="$BASE_URL/latest/download"
 else
-  url="$BASE_URL/download/$VERSION/$asset"
+  url_dir="$BASE_URL/download/$VERSION"
 fi
 
 if command -v curl >/dev/null 2>&1; then
@@ -38,12 +38,32 @@ else
   fail "need curl or wget"
 fi
 
+# A private repository answers 404 to anonymous downloads. With the GitHub CLI logged in, read the release
+# through the REST API instead (not used when PRDIFF_BASE_URL is set).
+use_gh=0
+if [ -z "${PRDIFF_BASE_URL:-}" ] && command -v gh >/dev/null 2>&1 && gh api "repos/$REPO" --jq .full_name >/dev/null 2>&1; then
+  use_gh=1
+fi
+
+gh_fetch() { # <asset name> <destination>
+  rel="releases/latest"
+  [ "$VERSION" = "latest" ] || rel="releases/tags/$VERSION"
+  id=$(gh api "repos/$REPO/$rel" --jq ".assets[] | select(.name == \"$1\") | .id") || return 1
+  [ -n "$id" ] || return 1
+  gh api "repos/$REPO/releases/assets/$id" -H "Accept: application/octet-stream" > "$2"
+}
+
+get() { # <asset name> <destination>
+  fetch "$url_dir/$1" "$2" 2>/dev/null && return 0
+  [ "$use_gh" = 1 ] && gh_fetch "$1" "$2"
+}
+
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-echo "Downloading $url"
-fetch "$url" "$tmp/$asset" || fail "download failed (is there a release for $asset?)"
-fetch "$url.sha256" "$tmp/$asset.sha256" || fail "checksum download failed"
+echo "Downloading $asset ($VERSION)"
+get "$asset" "$tmp/$asset" || fail "download failed (is there a release for $asset? for a private repository, log in with: gh auth login)"
+get "$asset.sha256" "$tmp/$asset.sha256" || fail "checksum download failed"
 
 want=$(cut -d ' ' -f 1 "$tmp/$asset.sha256")
 if command -v sha256sum >/dev/null 2>&1; then

@@ -21,9 +21,19 @@ cargo install --git https://github.com/hokamsingh/prdiff                        
 brew install hokamsingh/tap/prdiff                                                     # see packaging/homebrew
 ```
 
-The installer verifies a SHA-256 checksum; pin a release with `PRDIFF_VERSION=v0.2.0`. Prebuilt binaries are published
-by `.github/workflows/release.yml` when a `v*` tag is pushed. Shell completions: `prdiff completions zsh`; man page:
-`prdiff man`.
+The installer verifies a SHA-256 checksum; pin a release with `PRDIFF_VERSION=v0.2.0`. Prebuilt binaries (Linux x86_64 and
+arm64 as static musl builds, macOS Intel and Apple silicon) are published by `.github/workflows/release.yml`, which runs
+when a `v*` tag is pushed or from the Actions tab (`gh workflow run release.yml -f version=v0.2.0`). Shell completions:
+`prdiff completions zsh`; man page: `prdiff man`.
+
+**While the repository is private**, anonymous downloads return 404, so the `curl | sh` line above does not work. With the
+[GitHub CLI](https://cli.github.com) logged in (`gh auth login`), the installer falls back to the REST API by itself:
+
+```bash
+gh api repos/hokamsingh/prdiff/contents/install.sh -H 'Accept: application/vnd.github.raw' | sh
+```
+
+`cargo install --git` works with whatever git credentials you already use for the repository.
 
 ## Commands
 
@@ -166,8 +176,9 @@ warnings` on Ubuntu and macOS (git 2.55 and 2.56 there; development used 2.43) a
 macOS bug (`\b` is not supported in POSIX regex, which broke `where '#123'`).
 
 **Not run against the real thing:** the GitHub integration (`--pr`, `publish`) was tested against a fake `gh` only;
-`action.yml`, `release.yml`, the Homebrew formula and the `curl | sh` path against real releases have never run,
-because no release exists yet (push a `v*` tag to create one).
+`action.yml` and the Homebrew formula have never run. `release.yml` ran once (v0.2.0: four builds, checksums, release),
+and `install.sh` was run against that real release on Linux x86_64 through its `gh` fallback (the repository is private);
+the anonymous `curl | sh` path, macOS, arm64 and Homebrew installs are untested.
 
 ## Limits
 
