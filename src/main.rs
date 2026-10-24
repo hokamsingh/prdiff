@@ -98,6 +98,15 @@ enum ScopeArg {
 }
 
 #[derive(ValueEnum, Clone, Copy, PartialEq)]
+enum Renderer {
+    /// prdiff's own grouping (breaking changes first, PR and ticket links).
+    Builtin,
+    /// Run git-cliff on exactly the commits prdiff says are still new.
+    #[value(name = "git-cliff")]
+    GitCliff,
+}
+
+#[derive(ValueEnum, Clone, Copy, PartialEq)]
 enum PublishMode {
     /// Between `<!-- prdiff:start -->` and `<!-- prdiff:end -->` in the PR description.
     Body,
@@ -148,6 +157,12 @@ enum Cmd {
         /// markdown (default) or json.
         #[arg(long, value_enum, default_value_t = Format::Markdown)]
         format: Format,
+        /// Who formats the notes: the built-in renderer, or git-cliff (your cliff.toml; needs `git-cliff`).
+        #[arg(long, value_enum, default_value_t = Renderer::Builtin)]
+        renderer: Renderer,
+        /// git-cliff config file (default: git-cliff's own discovery, e.g. cliff.toml in the repository).
+        #[arg(long)]
+        cliff_config: Option<PathBuf>,
     },
     /// List files that would conflict, without touching the worktree.
     Conflicts {
@@ -437,10 +452,29 @@ fn run(cli: Cli) -> Result<()> {
             repo_url,
             ticket_url,
             format,
+            renderer,
+            cliff_config,
         } => {
             let (o, cfg) = options(&cli, c)?;
             let r = analyze(&o)?;
-            if *format == Format::Json {
+            if *renderer == Renderer::GitCliff {
+                if *format == Format::Json {
+                    return Err(bad(
+                        "--renderer git-cliff produces Markdown; drop --format json",
+                    ));
+                }
+                let git = Git::new(&o.repo, o.timeout);
+                print!(
+                    "{}",
+                    prdiff::cliff::render(
+                        &o.repo,
+                        &git,
+                        &r,
+                        cliff_config.as_deref(),
+                        title.as_deref()
+                    )?
+                );
+            } else if *format == Format::Json {
                 print!("{}", render::notes::render_json(&r));
             } else {
                 let git = Git::new(&cli.repo, o.timeout);

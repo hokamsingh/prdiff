@@ -4,6 +4,7 @@ pub mod analyze;
 pub mod cache;
 pub mod check;
 pub mod classify;
+pub mod cliff;
 pub mod codeowners;
 pub mod commits;
 pub mod config;

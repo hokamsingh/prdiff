@@ -44,7 +44,7 @@ current branch, base to the remote's default branch.
 |---|---|
 | `compare` | Classify commits, net diff per file, conflicts. `--format text|json|markdown|slack` |
 | `describe` | PR description generated from the report (`--format markdown\|slack\|json`) |
-| `notes` | Release notes by kind: breaking changes first, `(#123)` and ticket links |
+| `notes` | Release notes by kind: breaking changes first, `(#123)` and ticket links. `--renderer git-cliff` formats them with your `cliff.toml` |
 | `view` | One offline HTML report (below). `--serve` for a live local page |
 | `where <rev\|#123>` | Which environments already have this commit (merged, cherry-pick, same content, partial, not yet) |
 | `matrix` | Every head-only commit against every environment: the release train |
@@ -57,6 +57,7 @@ current branch, base to the remote's default branch.
 prdiff compare   --base origin/staging --head origin/develop
 prdiff describe  --base origin/staging --head origin/develop --title "release: develop to staging" > body.md
 prdiff notes     --base origin/production --head origin/staging --ticket-url 'https://jira.example.com/browse/{id}'
+prdiff notes     --base origin/production --head origin/staging --renderer git-cliff --cliff-config cliff.toml
 prdiff matrix    --head origin/develop --env production=origin/production --env staging=origin/staging
 prdiff where '#4821' --env production=origin/production --env staging=origin/staging
 prdiff view      --base origin/staging --head origin/develop --open
@@ -91,6 +92,15 @@ ref = "origin/staging"
 repo_url = "https://github.com/acme/app"
 ticket_url = "https://jira.example.com/browse/{id}"
 ```
+
+### Notes with git-cliff
+
+If your team already formats changelogs with [git-cliff](https://git-cliff.org), keep your `cliff.toml`: prdiff works out
+which commits are really new and git-cliff only formats them. Every other commit in `base..head` (squashed,
+cherry-picked, merges, empty, filtered by `--path`) is passed as `--skip-commit`, so the changelog lists exactly the
+commits `describe` would. `git-cliff` must be installed (`cargo install git-cliff`); prdiff runs it with `--no-exec`, so
+commands in a repository's `cliff.toml` are never executed. `--cliff-config <file>` picks a config, `--title <x>` becomes
+git-cliff's `--tag`. `--format json` is not available with this renderer.
 
 ## `prdiff view`
 
@@ -170,10 +180,12 @@ Time is spent in `git` subprocesses; the Rust side is under a millisecond. Repro
 
 ## Status
 
-`cargo test` runs 61 tests against fixture repos built with the real `git` binary (golden JSON, CLI exit codes, a fake
-`gh`, a local `file://` release for `install.sh`, a randomized conflict check). CI runs them with `fmt` and `clippy -D
+`cargo test` runs 66 tests against fixture repos built with the real `git` binary (golden JSON, CLI exit codes, a fake
+`gh` and `git-cliff`, a local `file://` release for `install.sh`, a randomized conflict check). CI runs them with `fmt` and `clippy -D
 warnings` on Ubuntu and macOS (git 2.55 and 2.56 there; development used 2.43) and is green. CI already caught one real
 macOS bug (`\b` is not supported in POSIX regex, which broke `where '#123'`).
+
+The test against the real `git-cliff` runs only where it is installed (not in CI).
 
 **Not run against the real thing:** the GitHub integration (`--pr`, `publish`) was tested against a fake `gh` only;
 `action.yml` and the Homebrew formula have never run. `release.yml` ran once (v0.2.0: four builds, checksums, release),
